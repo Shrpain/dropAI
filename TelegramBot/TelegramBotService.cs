@@ -160,19 +160,20 @@ namespace DropAI.TelegramBot
                 else if (lowerText == "📊 trạng thái" || lowerText.StartsWith("/status"))
                 {
                     string loginStatus = api.IsLoggedIn ? "✅ Đã đăng nhập" : "❌ Chưa đăng nhập";
-                    string autoBet = api.IsAutoBetEnabled ? "✅ Bật" : "❌ Tắt";
+                    string autoBet = api.IsAutoBetEnabled ? "✅ Đang bật" : "⏸ Đang tắt";
                     var balance = await api.GetBalanceAsync();
+                    var saved = api.GetSavedLogin();
                     
                     await bot.SendTextMessageAsync(chatId, 
                         $"📊 *TRẠNG THÁI HỆ THỐNG*\n" +
-                        $"👤 KH: {loginStatus}\n" +
-                        $"💰 Số dư: {balance:N0} đ\n" +
-                        $"🤖 Auto: {autoBet}\n" +
-                        $"💵 Cược gốc: {api.BaseAmount:N0} đ\n" +
-                        $"📈 Chuỗi thắng: {api.WinStreak}\n" +
-                        $"⚙ Config: {string.Join(",", api.MartingaleConfig)}",
+                        $"👤 *Tài khoản:* `{saved?.User ?? "N/A"}` ({loginStatus})\n" +
+                        $"💰 *Số dư:* `{balance:N0} đ`\n" +
+                        $"🤖 *Tự động:* {autoBet}\n" +
+                        $"💵 *Cược gốc:* `{api.BaseAmount:N0} đ`\n" +
+                        $"📈 *Chuỗi thắng:* {api.WinStreak} ván\n" +
+                        $"⚙ *Dãy cược:* `{string.Join(", ", api.MartingaleConfig)}`",
                         parseMode: ParseMode.Markdown,
-                        replyMarkup: GetMainMenu(api.GetSavedLogin()?.User));
+                        replyMarkup: GetMainMenu(saved?.User));
                 }
                 else if (lowerText == "▶ bật auto" || lowerText.Contains("/autobet on"))
                 {
@@ -267,10 +268,10 @@ namespace DropAI.TelegramBot
                         string guess = item.aiGuess == "Big" ? "Big  " : (item.aiGuess == "Small" ? "Small" : "-----");
                         string resStr = "---";
 
-                        if (item.aiResult == "Thắng") {
+                        if (item.aiResult == "Thắng" || item.aiResult == "✅") {
                             resStr = "✅";
                             winCount++;
-                        } else if (item.aiResult == "Thua") {
+                        } else if (item.aiResult == "Thua" || item.aiResult == "❌") {
                             resStr = "❌";
                             lossCount++;
                         }

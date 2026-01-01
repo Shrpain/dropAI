@@ -744,8 +744,17 @@ namespace DropAI.Services
             }
 
             // Serialize History with keys matching HistoryItem class in TelegramBotService
-            var historySummary = JsonSerializer.Serialize(history.Take(10).Select(h => {
+            var historySummary = JsonSerializer.Serialize(history.Take(10).Select((h, i) => {
                 var aiPObj = _aiPredictions.ContainsKey(h.IssueNumber) ? _aiPredictions[h.IssueNumber] : null;
+                
+                // BACKFILL: If no stored prediction, try to calculate one for display (only for older items)
+                if (aiPObj == null && i < history.Count - 1)
+                {
+                    // Create a sub-history starting from this item to predict it
+                    var subHistory = history.Skip(i).ToList();
+                    aiPObj = AiStrategyService.EnsemblePredict(subHistory);
+                }
+
                 string aiP = aiPObj?.Pred ?? "-";
                 // Determine result for THIS history item
                 string rStr = "-";
@@ -756,12 +765,12 @@ namespace DropAI.Services
                 
                 return new 
                 {
-                    issue = h.IssueNumber,
+                    issue = h.IssueNumber.Substring(h.IssueNumber.Length - 5), // Show last 5 digits for cleaner table
                     number = h.Number.ToString(),
-                    size = h.Size,
-                    parity = h.Parity,
-                    aiGuess = aiP,      // Matches HistoryItem.aiGuess
-                    aiResult = rStr     // Matches HistoryItem.aiResult
+                    size = h.Size[0].ToString(), // B/S
+                    parity = h.Parity[0].ToString(), // O/E
+                    aiGuess = aiP,
+                    aiResult = rStr == "Thắng" ? "✅" : (rStr == "Thua" ? "❌" : "-")
                 };
             }));
 
@@ -769,7 +778,8 @@ namespace DropAI.Services
             string balanceStr = balance.ToString("N0", vnCulture) + " đ";
 
             // Hack: Append footer prediction to betAmount string so it appears in the message
-            string footerPrediction = nextPred != null ? $"🔮 Dự đoán tiếp: {nextPred.Pred} ({nextPred.Confidence}%)" : "";
+            string footerReason = nextPred != null && !string.IsNullOrEmpty(nextPred.Reason) ? $"\n💡 *Lý do:* {nextPred.Reason}" : "";
+            string footerPrediction = nextPred != null ? $"🔮 *Dự đoán tiếp:* {nextPred.Pred} ({nextPred.Confidence}%){footerReason}" : "";
             string betWithFooter = $"{betAmtStr}\n\n{footerPrediction}";
 
             // Call updated 10-arg method
