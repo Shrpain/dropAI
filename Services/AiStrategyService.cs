@@ -103,9 +103,9 @@ namespace DropAI.Services
                     
                     if (predValue == "Big") bigVote += impact; else smallVote += impact;
                     
+                    int occ = GetDynamicProp(prediction, "Occurrences", 0);
                     string text = $"{strat.Key}({Math.Round(score * 100)}%)";
-                    if (prediction is not string && ((dynamic)prediction).Occurrences > 0) 
-                        text += $"[{((dynamic)prediction).Occurrences}]";
+                    if (occ > 0) text += $"[{occ}]";
                     
                     details += text + "; ";
                     
@@ -167,13 +167,12 @@ namespace DropAI.Services
             try
             {
                 var prop = obj.GetType().GetProperty(propName);
-                if (prop != null) return (T)prop.GetValue(obj)!;
-                
-                // Fallback for anonymous types where GetProperty might fail or if using dynamic
-                dynamic d = obj;
-                if (propName == "Occurrences") return (T)(object)d.Occurrences;
-                if (propName == "Reason") return (T)(object)d.Reason;
-                if (propName == "Pred") return (T)(object)d.Pred;
+                if (prop != null)
+                {
+                    var val = prop.GetValue(obj);
+                    if (val is T t) return t;
+                    if (val != null) return (T)Convert.ChangeType(val, typeof(T));
+                }
             }
             catch { }
             return defaultValue;
