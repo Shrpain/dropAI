@@ -43,7 +43,7 @@ namespace DropAI.Services
         private AiPrediction? _currentPrediction;
         private decimal _lastBalance = 0;
 
-        private System.Collections.Concurrent.ConcurrentDictionary<string, string> _aiPredictions = new();
+        private System.Collections.Concurrent.ConcurrentDictionary<string, AiPrediction> _aiPredictions = new();
 
         public GameApiService(Microsoft.AspNetCore.SignalR.IHubContext<DropAI.Hubs.BrowserHub> hubContext, DropAI.TelegramBot.TelegramBotService botService)
         {
@@ -154,7 +154,7 @@ namespace DropAI.Services
                                 // history[0].IssueNumber is the latest result (e.g. 080).
                                 // So this prediction is for 081.
                                 string nextIssue = (long.Parse(latest.IssueNumber) + 1).ToString();
-                                _aiPredictions[nextIssue] = _currentPrediction?.Pred ?? "-";
+                                _aiPredictions[nextIssue] = _currentPrediction ?? new AiPrediction { Pred = "-" };
 
                                 // 2. Evaluate AutoBet
                                 await EvaluateAutoBetInternal(history);
@@ -545,10 +545,10 @@ namespace DropAI.Services
             await _hubContext.Clients.All.SendAsync("ReceiveStatus", Status);
         }
 
-        public void StorePrediction(string issue, string guess)
+        public void StorePrediction(string issue, AiPrediction prediction)
         {
-            _aiPredictions[issue] = guess;
-            Console.WriteLine($"[GameAPI] Stored Prediction: {issue} -> {guess}");
+            _aiPredictions[issue] = prediction;
+            Console.WriteLine($"[GameAPI] Stored Prediction: {issue} -> {prediction.Pred} ({prediction.Reason})");
         }
 
         // === HELPER METHODS ===
@@ -723,11 +723,16 @@ namespace DropAI.Services
         {
             // FIX: Retrieve the prediction specifically for *this* finished issue to show in the header
             string headerPred = "?";
+            string headerReason = "";
+            int headerOccur = 0;
             string rawStatus = "Mất kết nối";
             
             if (_aiPredictions.TryGetValue(latest.IssueNumber, out var historicalPred))
             {
-                headerPred = historicalPred;
+                headerPred = historicalPred.Pred;
+                headerReason = historicalPred.Reason;
+                headerOccur = historicalPred.Occurrences;
+
                 if (latest.Size != "-")
                 {
                     rawStatus = headerPred == latest.Size ? "Thắng" : "Thua";
@@ -740,7 +745,8 @@ namespace DropAI.Services
 
             // Serialize History with keys matching HistoryItem class in TelegramBotService
             var historySummary = JsonSerializer.Serialize(history.Take(10).Select(h => {
-                string aiP = _aiPredictions.ContainsKey(h.IssueNumber) ? _aiPredictions[h.IssueNumber] : "-";
+                var aiPObj = _aiPredictions.ContainsKey(h.IssueNumber) ? _aiPredictions[h.IssueNumber] : null;
+                string aiP = aiPObj?.Pred ?? "-";
                 // Determine result for THIS history item
                 string rStr = "-";
                 if (aiP != "-" && h.Size != "-")
@@ -766,7 +772,7 @@ namespace DropAI.Services
             string footerPrediction = nextPred != null ? $"🔮 Dự đoán tiếp: {nextPred.Pred} ({nextPred.Confidence}%)" : "";
             string betWithFooter = $"{betAmtStr}\n\n{footerPrediction}";
 
-            // Call updated 9-arg method
+            // Call updated 10-arg method
             await _botService.BroadcastResultAsync(
                 balanceStr,
                 latest.IssueNumber,
@@ -776,7 +782,8 @@ namespace DropAI.Services
                 rawStatus,
                 betWithFooter,
                 historySummary,
-                nextPred?.Occurrences ?? 0
+                headerOccur,
+                headerReason
             );
             
             // Send to Hub (Legacy - optional but keeping for consistency)

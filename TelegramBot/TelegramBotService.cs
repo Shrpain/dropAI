@@ -229,18 +229,19 @@ namespace DropAI.TelegramBot
             return Task.CompletedTask;
         }
 
-        public async Task BroadcastResultAsync(string balance, string issue, string number, string size, string aiGuess, string aiResult, string betAmount, string historyJson, int occurrences = 0)
+        public async Task BroadcastResultAsync(string balance, string issue, string number, string size, string aiGuess, string aiResult, string betAmount, string historyJson, int occurrences = 0, string reason = "")
         {
             if (_activeChats.IsEmpty) return;
 
             // 1. Current Result Message
             string status = aiResult == "Thắng" ? "✅ Thắng" : "❌ Thua";
-            string patternInfo = occurrences > 0 ? $"\n📊 *Dấu hiệu:* Đã xuất hiện {occurrences} lần" : "";
+            string patternInfo = occurrences > 0 ? $"\n📊 *Dấu hiệu:* {occurrences} lần" : "";
+            string reasonInfo = !string.IsNullOrEmpty(reason) ? $"\n💡 *Lý do:* {reason}" : "";
             
             var msg = $"💰 *Tiền:* {balance}\n" +
                       $"📅 *Phiên:* {issue}\n" +
                       $"🔢 *Số:* {number} ({size})\n" +
-                      $"🤖 *AI:* {aiGuess} | {status}{patternInfo}\n" +
+                      $"🤖 *AI:* {aiGuess} | {status}{patternInfo}{reasonInfo}\n" +
                       $"💵 *Cược:* {betAmount}";
 
             // 2. Format History Table (Last 10)

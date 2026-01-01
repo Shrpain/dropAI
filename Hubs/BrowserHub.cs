@@ -15,7 +15,7 @@ namespace DropAI.Hubs
 
         public void SendClientPrediction(string issue, string guess)
         {
-            _gameApiService.StorePrediction(issue, guess);
+            _gameApiService.StorePrediction(issue, new Services.AiPrediction { Pred = guess, Reason = "Dự đoán từ trình duyệt" });
         }
 
         public async Task NotifyBotResult(string balance, string issue, string number, string size, string aiGuess, string aiResult, string betAmount, string historyJson)

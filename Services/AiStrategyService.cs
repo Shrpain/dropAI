@@ -11,7 +11,8 @@ namespace DropAI.Services
         public string BestStrat { get; set; } = "None";
         public double BestScore { get; set; }
         public string Details { get; set; } = "";
-        public int Occurrences { get; set; } // Added for pattern tracking
+        public int Occurrences { get; set; }
+        public string Reason { get; set; } = ""; // Human-readable reasoning
     }
 
     public class AiStrategyService
@@ -146,6 +147,7 @@ namespace DropAI.Services
             finalConf *= (0.65 + (chaosFactor * 0.35));
 
             int finalOccur = (bestMeta != null && bestMeta is not string) ? ((dynamic)bestMeta).Occurrences : 0;
+            string finalReason = (bestMeta != null && bestMeta is not string) ? ((dynamic)bestMeta).Reason : GetDefaultReason(bestStrat);
 
             return new AiPrediction
             {
@@ -154,13 +156,32 @@ namespace DropAI.Services
                 BestStrat = bestStrat,
                 BestScore = bestStratScore,
                 Details = details,
-                Occurrences = finalOccur
+                Occurrences = finalOccur,
+                Reason = finalReason
+            };
+        }
+
+        private static string GetDefaultReason(string strat)
+        {
+            return strat switch
+            {
+                "Streak" => "Phát hiện cầu bệt (Streak)",
+                "ZigZag" => "Phát hiện cầu 1-1 (ZigZag)",
+                "Frequency" => "Dựa trên tần suất xuất hiện (Frequency)",
+                "SmartBridge" => "Khớp mẫu hình cầu đối xứng (Bridge)",
+                "Mirror" => "Dự đoán theo quy luật đối gương (Mirror)",
+                "Neural" => "Phân tích chuỗi lịch sử sâu (Neural)",
+                "Wave" => "Dựa trên chu kỳ sóng (Wave)",
+                "Bayesian" => "Thống kê xác suất Bayesian",
+                "MarkovO4" => "Chuỗi Markov bậc 4 (Xác suất thống kê)",
+                "BridgeBreak" => "Phát hiện điểm gãy cầu",
+                _ => "Phân tích tổng hợp (Ensemble)"
             };
         }
 
         #region Strategies
 
-        private static string? PredictStreak(List<GameHistoryItem> history, int index)
+        private static object? PredictStreak(List<GameHistoryItem> history, int index)
         {
             if (index >= history.Count - 1) return null;
             var prev = history[index + 1];
@@ -170,16 +191,16 @@ namespace DropAI.Services
                 if (history[i].Size == prev.Size) s++;
                 else break;
             }
-            if (s >= 2) return prev.Size;
+            if (s >= 2) return new { Pred = prev.Size, Reason = $"Phát hiện cầu bệt {s} cây", Occurrences = s };
             return null;
         }
 
-        private static string? PredictZigZag(List<GameHistoryItem> history, int index)
+        private static object? PredictZigZag(List<GameHistoryItem> history, int index)
         {
             if (index >= history.Count - 2) return null;
             var p1 = history[index + 1];
             var p2 = history[index + 2];
-            if (p1.Size != p2.Size) return p1.Size == "Big" ? "Small" : "Big";
+            if (p1.Size != p2.Size) return new { Pred = p1.Size == "Big" ? "Small" : "Big", Reason = "Phát hiện cầu 1-1 (ZigZag)" };
             return null;
         }
 
@@ -198,7 +219,7 @@ namespace DropAI.Services
             return null;
         }
 
-        private static string? PredictSmartBridge(List<GameHistoryItem> history, int index)
+        private static object? PredictSmartBridge(List<GameHistoryItem> history, int index)
         {
             if (index >= history.Count - 8) return null;
             int bigVote = 0; int smallVote = 0; int matches = 0;
@@ -218,8 +239,8 @@ namespace DropAI.Services
                 }
             }
             if (matches < 3) return null;
-            if ((double)bigVote / matches > 0.7) return "Big";
-            if ((double)smallVote / matches > 0.7) return "Small";
+            if ((double)bigVote / matches > 0.7) return new { Pred = "Big", Reason = "Khớp cầu đối xứng (Bridge)", Occurrences = matches };
+            if ((double)smallVote / matches > 0.7) return new { Pred = "Small", Reason = "Khớp cầu đối xứng (Bridge)", Occurrences = matches };
             return null;
         }
 
@@ -346,9 +367,9 @@ namespace DropAI.Services
                     }
 
                     if (breakCount > followCount && breakCount > 2)
-                        return new { Pred = p.next == "B" ? "Small" : "Big", Occurrences = followCount + breakCount };
+                        return new { Pred = p.next == "B" ? "Small" : "Big", Occurrences = followCount + breakCount, Reason = $"Gãy cầu {p.name}" };
                     
-                    return new { Pred = p.next == "B" ? "Big" : "Small", Occurrences = followCount + breakCount };
+                    return new { Pred = p.next == "B" ? "Big" : "Small", Occurrences = followCount + breakCount, Reason = $"Theo cầu {p.name}" };
                 }
             }
             return null;
