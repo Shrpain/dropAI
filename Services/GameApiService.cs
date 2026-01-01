@@ -767,8 +767,8 @@ namespace DropAI.Services
                 {
                     issue = h.IssueNumber.Substring(h.IssueNumber.Length - 5), // Show last 5 digits for cleaner table
                     number = h.Number.ToString(),
-                    size = h.Size[0].ToString(), // B/S
-                    parity = h.Parity[0].ToString(), // O/E
+                    size = h.Size,
+                    parity = h.Parity,
                     aiGuess = aiP,
                     aiResult = rStr == "Thắng" ? "✅" : (rStr == "Thua" ? "❌" : "-")
                 };
