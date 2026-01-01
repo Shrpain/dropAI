@@ -10,6 +10,8 @@ git pull origin main
 echo "🔨 Đang biên dịch Bot..."
 dotnet build -c Release
 
-# 3. Run Bot in background (optional) or just run
+# 3. Run Bot with memory safety flags
 echo "✅ Hoàn tất! Chạy Bot..."
+export DOTNET_gcServer=0
+export DOTNET_GCHeapHardLimit=1C000000
 dotnet run -c Release --project .
