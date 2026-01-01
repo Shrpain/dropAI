@@ -146,8 +146,8 @@ namespace DropAI.Services
             double chaosFactor = 1 - Math.Abs(0.5 - entropy);
             finalConf *= (0.65 + (chaosFactor * 0.35));
 
-            int finalOccur = (bestMeta != null && bestMeta is not string) ? ((dynamic)bestMeta).Occurrences : 0;
-            string finalReason = (bestMeta != null && bestMeta is not string) ? ((dynamic)bestMeta).Reason : GetDefaultReason(bestStrat);
+            int finalOccur = GetDynamicProp(bestMeta, "Occurrences", 0);
+            string finalReason = GetDynamicProp(bestMeta, "Reason", GetDefaultReason(bestStrat));
 
             return new AiPrediction
             {
@@ -159,6 +159,24 @@ namespace DropAI.Services
                 Occurrences = finalOccur,
                 Reason = finalReason
             };
+        }
+
+        private static T GetDynamicProp<T>(object? obj, string propName, T defaultValue)
+        {
+            if (obj == null || obj is string) return defaultValue;
+            try
+            {
+                var prop = obj.GetType().GetProperty(propName);
+                if (prop != null) return (T)prop.GetValue(obj)!;
+                
+                // Fallback for anonymous types where GetProperty might fail or if using dynamic
+                dynamic d = obj;
+                if (propName == "Occurrences") return (T)(object)d.Occurrences;
+                if (propName == "Reason") return (T)(object)d.Reason;
+                if (propName == "Pred") return (T)(object)d.Pred;
+            }
+            catch { }
+            return defaultValue;
         }
 
         private static string GetDefaultReason(string strat)
@@ -200,7 +218,7 @@ namespace DropAI.Services
             if (index >= history.Count - 2) return null;
             var p1 = history[index + 1];
             var p2 = history[index + 2];
-            if (p1.Size != p2.Size) return new { Pred = p1.Size == "Big" ? "Small" : "Big", Reason = "Phát hiện cầu 1-1 (ZigZag)" };
+            if (p1.Size != p2.Size) return new { Pred = p1.Size == "Big" ? "Small" : "Big", Reason = "Phát hiện cầu 1-1 (ZigZag)", Occurrences = 0 };
             return null;
         }
 
