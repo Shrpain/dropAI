@@ -4,7 +4,24 @@ namespace DropAI.Hubs
 {
     public class BrowserHub : Hub
     {
-        // We can add methods here if the client needs to send messages to the server,
-        // but primarily we will use IHubContext to broadcast from the server.
+        private readonly Services.GameApiService _gameApiService;
+        private readonly TelegramBot.TelegramBotService _botService;
+
+        public BrowserHub(Services.GameApiService gameApiService, TelegramBot.TelegramBotService botService)
+        {
+            _gameApiService = gameApiService;
+            _botService = botService;
+        }
+
+        public void SendClientPrediction(string issue, string guess)
+        {
+            _gameApiService.StorePrediction(issue, guess);
+        }
+
+        public async Task NotifyBotResult(string balance, string issue, string number, string size, string aiGuess, string aiResult, string betAmount, string historyJson)
+        {
+             // Forward to Telegram Service
+             await _botService.BroadcastResultAsync(balance, issue, number, size, aiGuess, aiResult, betAmount, historyJson);
+        }
     }
 }

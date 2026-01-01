@@ -14,6 +14,13 @@ $(document).ready(function () {
     connection.on("ReceiveStatus", status => updateStatusUI(status));
 
     // --- AI & HISTORY STORAGE ---
+    // Load Pending Predictions (Live snapshots)
+    let pendingPredictions = {};
+    try {
+        const storedPreds = localStorage.getItem('dropAI_pending_preds');
+        if (storedPreds) pendingPredictions = JSON.parse(storedPreds);
+    } catch (e) { console.error("Load Pending Preds Error", e); }
+
     // Load from LocalStorage if available on load
     let fullGameHistory = [];
     try {
@@ -45,7 +52,7 @@ $(document).ready(function () {
                     filled++;
 
                     if (item.size && item.size !== '-') {
-                        item.aiResult = prediction.pred === item.size ? 'HIT' : 'MISS';
+                        item.aiResult = prediction.pred === item.size ? 'Thắng' : 'Thua';
                     } else {
                         item.aiResult = '-';
                     }
@@ -79,13 +86,18 @@ $(document).ready(function () {
 
     // Save when user changes input
     $baseAmountInput.on('change', function () {
-        localStorage.setItem('dropAI_baseAmount', $(this).val());
-        console.log("[Config] Saved Base Amount:", $(this).val());
+        const val = $(this).val();
+        localStorage.setItem('dropAI_baseAmount', val);
     });
 
     $martingaleConfig.on('change', function () {
-        localStorage.setItem('dropAI_martingale', $(this).val());
-        console.log("[Config] Saved Martingale Values:", $(this).val());
+        const val = $(this).val();
+        localStorage.setItem('dropAI_martingale', val);
+    });
+
+    // Toggle Handler
+    $('#autoBetToggle').on('change', function () {
+        evaluateAutoBet();
     });
 
     // Removed Traffic Monitor Logic
@@ -164,15 +176,33 @@ $(document).ready(function () {
                         // CRITICAL: Also retry if previously marked as '-' (failed prediction)
                         // This ensures we keep trying as more data becomes available
 
-                        // Calculate AI prediction using ALL history BEFORE this game
-                        const prediction = getEnsemblePrediction(fullGameHistory, index);
+                        // CRITICAL: Check if we have a LIVE captured prediction for this issue first
+                        let prediction = null;
+                        const pendingEntry = pendingPredictions[item.issue];
+                        if (pendingEntry) {
+                            if (typeof pendingEntry === 'string') {
+                                prediction = { pred: pendingEntry };
+                            } else if (pendingEntry.pred) {
+                                prediction = pendingEntry;
+                            }
+                        }
+
+                        // ONLY re-calculate if we have NO captured record
+                        if (!prediction) {
+                            prediction = getEnsemblePrediction(fullGameHistory, index);
+                        }
+
+                        // DEBUG MATCHING
+                        if (!prediction && index < 5) {
+                            console.log(`[AI Debug] No prediction for ${item.issue}. Pending keys:`, Object.keys(pendingPredictions).slice(-3));
+                        }
 
                         if (prediction) {
                             item.aiGuess = prediction.pred;
 
                             // Verify if we have actual result
                             if (item.size && item.size !== '-') {
-                                item.aiResult = prediction.pred === item.size ? 'HIT' : 'MISS';
+                                item.aiResult = prediction.pred === item.size ? 'Thắng' : 'Thua';
                             }
                         } else {
                             item.aiGuess = '-';
@@ -188,6 +218,39 @@ $(document).ready(function () {
 
                     // 3. Trigger AI Prediction for NEXT game
                     updateAIPrediction();
+
+                    // 4. NOTIFY BOT (Result + Prediction + Bet)
+                    const latest = fullGameHistory[0];
+                    if (latest) {
+                        const curIssue = latest.issue;
+                        const curNumber = latest.number;
+                        const curSize = latest.size;
+                        const curAiGuess = latest.aiGuess || "-";
+                        const curAiResult = latest.aiResult || "-";
+                        const curBalance = $('#uiAmount').text() || "Unknown";
+
+                        const streakMsg = winStreak > 0 ? `\n🔥 Chuỗi thắng hiện tại: ${winStreak}` : "";
+
+                        // Check if we placed a bet on THIS issue
+                        let betAmtStr = "0 đ";
+                        if (lastFinishedBetIssue === curIssue) {
+                            betAmtStr = lastFinishedBetAmount.toLocaleString() + " đ" + streakMsg;
+                        } else {
+                            betAmtStr += streakMsg; // Still show streak if available
+                        }
+
+                        // Send to Server
+                        connection.invoke("NotifyBotResult",
+                            curBalance,
+                            String(curIssue),
+                            String(curNumber),
+                            String(curSize),
+                            String(curAiGuess),
+                            String(curAiResult),
+                            betAmtStr,
+                            JSON.stringify(fullGameHistory.slice(0, 10))
+                        ).catch(err => console.error("Bot Notify Error:", err));
+                    }
                 }
             }
 
@@ -196,42 +259,12 @@ $(document).ready(function () {
         }
     });
 
+    // Generic render placeholder before we load the full one below
     function renderHistoryTable() {
-        const $tableBody = $('#gameHistoryBody');
-        const $card = $('#gameHistoryCard');
-        const $cardHeader = $card.find('.card-header');
-
-        $tableBody.empty();
-        $card.show();
-
-        // Update Header with Count
-        // If "Game History" text is there, replace/append count
-        const countBadge = `<span class="badge bg-light text-dark float-end">${fullGameHistory.length} Records</span>`;
-        if ($cardHeader.find('.badge').length > 0) $cardHeader.find('.badge').replaceWith(countBadge);
-        else $cardHeader.append(countBadge);
-
-        // Show massive amount of rows (2000) as requested "Unlimited"
-        // Virtualization needed for tens of thousands, but 2000 is fine for now on modern PCs.
-        const displayList = fullGameHistory.slice(0, 2000);
-
-        displayList.forEach((item, index) => {
-            // Use STORED AI prediction (not recalculating)
-            const aiGuess = item.aiGuess || '-';
-            const aiResult = item.aiResult || '-';
-
-            const row = `
-                <tr>
-                    <td>${item.issue}</td>
-                    <td><span class="fw-bold text-primary fs-5">${item.number}</span></td>
-                     <td><span class="badge ${item.size === 'Big' ? 'bg-danger' : 'bg-success'}">${item.size}</span></td>
-                     <td><span class="badge ${item.parity === 'Double' ? 'bg-danger' : 'bg-success'}">${item.parity}</span></td>
-                     <td><span class="badge ${aiGuess === 'Big' ? 'bg-danger' : (aiGuess === 'Small' ? 'bg-success' : 'bg-secondary')}">${aiGuess}</span></td>
-                     <td><span class="badge ${aiResult === 'HIT' ? 'bg-success' : (aiResult === 'MISS' ? 'bg-danger' : 'bg-secondary')}">${aiResult}</span></td>
-                </tr>
-             `;
-            $tableBody.append(row);
-        });
+        // This is a placeholder, the full version is at the end of the file.
+        // It's called after connection is established.
     }
+
 
     connection.on("ReceiveLoginSuccess", function (jsonString) {
         try {
@@ -325,6 +358,13 @@ $(document).ready(function () {
     // GLOBAL STATE for Auto-Bet
     let martingaleStep = 0;
     let lastBetIssue = "";
+    let lastBetType = ""; // Track what we actually bet on
+    let lastBetAmount = 0; // Track amount for Bot reporting
+    let lastFinishedBetIssue = ""; // For Bot reporting of COMPLETED game
+    let lastFinishedBetAmount = 0; // For Bot reporting of COMPLETED game
+    let winStreak = 0; // Infinite win streak counter
+    let currentAiPrediction = null; // Store latest ensemble result for sync
+    let currentAiPredictionMeta = null; // Store metadata like occurrences for sync
 
     const Strategies = {
         // Strategy 1: Streak Follower (Bệt)
@@ -377,114 +417,324 @@ $(document).ready(function () {
             }
         },
 
-        // Strategy 4: Deep Pattern Search
-        PatternSearch: {
-            name: "Historical Pattern",
+        // Strategy 4: Smart Bridge Inspector (Cầu Tự Động)
+        // Detects patterns like 2-2, 1-2, 1-3, 3-3 by checking multiple signature lengths
+        SmartBridge: {
+            name: "Smart Bridge (Cầu)",
             predict: function (history, targetIndex) {
-                if (targetIndex >= history.length - 6) return null;
-                const patternLen = 5;
-                let signature = "";
-                for (let i = 1; i <= patternLen; i++) {
-                    signature += history[targetIndex + i].size[0];
-                }
-                let bigNext = 0;
-                let smallNext = 0;
-                let matches = 0;
-                for (let i = targetIndex + 2; i < history.length - patternLen; i++) {
-                    let match = true;
-                    for (let k = 0; k < patternLen; k++) {
-                        if (history[i + k].size[0] !== signature[k]) {
-                            match = false;
-                            break;
+                if (targetIndex >= history.length - 8) return null;
+
+                let bestMatchCount = 0;
+                let voteBig = 0;
+                let voteSmall = 0;
+
+                // Check patterns of length 3 to 6 (covers 1-2, 2-2, 3-3, etc)
+                const lengths = [3, 4, 5, 6];
+
+                lengths.forEach(len => {
+                    let signature = "";
+                    for (let i = 1; i <= len; i++) {
+                        signature += history[targetIndex + i].size[0];
+                    }
+
+                    // Scan history
+                    for (let i = targetIndex + 2; i < history.length - len; i++) {
+                        let match = true;
+                        for (let k = 0; k < len; k++) {
+                            if (history[i + k].size[0] !== signature[k]) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            const nextResult = history[i - 1];
+                            if (nextResult) {
+                                if (nextResult.size === 'Big') voteBig++;
+                                else voteSmall++;
+                                bestMatchCount++;
+                            }
                         }
                     }
-                    if (match) {
-                        const nextResult = history[i - 1];
-                        if (nextResult) {
-                            if (nextResult.size === 'Big') bigNext++;
-                            else smallNext++;
-                            matches++;
-                        }
+                });
+
+                if (bestMatchCount < 3) return null;
+                const total = voteBig + voteSmall;
+                const ratio = voteBig / total;
+                if (ratio > 0.7) return 'Big';
+                if (ratio < 0.3) return 'Small';
+                return null;
+            }
+        },
+
+        // Strategy 5: Mirror (A-B-A)
+        MirrorPattern: {
+            name: "Mirror Logic (X-2)",
+            predict: function (history, targetIndex) {
+                if (targetIndex >= history.length - 2) return null;
+                const prev2 = history[targetIndex + 2];
+                if (!prev2) return null;
+                return prev2.size;
+            }
+        },
+
+        // Strategy 6: Extreme Neural Pattern Matcher
+        DynamicPatternMatcher: {
+            name: "Neural Pattern Matcher",
+            predict: function (history, targetIndex) {
+                if (targetIndex >= history.length - 2) return null;
+                // High resolution: scan from length 24 down to 4
+                for (let seqLen = 24; seqLen >= 4; seqLen--) {
+                    if (targetIndex >= history.length - seqLen - 1) continue;
+                    let signature = "";
+                    for (let i = 1; i <= seqLen; i++) signature += history[targetIndex + i].size[0];
+                    for (let i = targetIndex + 2; i < history.length - seqLen; i++) {
+                        let match = true;
+                        for (let k = 0; k < seqLen; k++) if (history[i + k].size[0] !== signature[k]) { match = false; break; }
+                        if (match) return history[i - 1].size;
                     }
                 }
-                if (matches < 3) return null;
-                const ratio = bigNext / (bigNext + smallNext);
-                if (ratio > 0.65) return 'Big';
-                if (ratio < 0.35) return 'Small';
+                return null;
+            }
+        },
+
+        // Strategy 7: Wave Resonance (Harmonic Signal Analysis)
+        WaveResonance: {
+            name: "Wave Resonance",
+            predict: function (history, targetIndex) {
+                if (targetIndex >= history.length - 20) return null;
+                const wave = [];
+                for (let i = targetIndex + 1; i < targetIndex + 31 && i < history.length; i++) wave.push(history[i].size === 'Big' ? 1 : -1);
+                let bestPeriod = -1; let maxCorr = -1;
+                for (let p = 1; p <= 12; p++) {
+                    let corr = 0; let count = 0;
+                    for (let i = 0; i < wave.length - p; i++) { if (wave[i] === wave[i + p]) corr++; count++; }
+                    if (count > 0 && corr / count > maxCorr) { maxCorr = corr / count; bestPeriod = p; }
+                }
+                if (maxCorr > 0.72 && bestPeriod > 0) return history[targetIndex + bestPeriod].size;
+                return null;
+            }
+        },
+
+        // Strategy 8: Bayesian Correlator (Long-Range Fuzzy)
+        LongRangeBayesian: {
+            name: "Bayesian Correlator",
+            predict: function (history, targetIndex) {
+                if (history.length < 100) return null;
+                const seq = history.slice(targetIndex + 1, targetIndex + 10).map(x => x.size[0]).join('');
+                const scores = { 'Big': 0, 'Small': 0 };
+                for (let i = targetIndex + 11; i < history.length - 9; i++) {
+                    let matches = 0;
+                    for (let k = 0; k < 9; k++) if (history[i + k].size[0] === seq[k]) matches++;
+                    if (matches >= 7) scores[history[i - 1].size] += matches;
+                }
+                if (scores['Big'] === 0 && scores['Small'] === 0) return null;
+                return scores['Big'] > scores['Small'] ? 'Big' : 'Small';
+            }
+        },
+
+        // Strategy 9: Markov Chain Order 4
+        MarkovOrder4: {
+            name: "Advanced Markov (O4)",
+            predict: function (history, targetIndex) {
+                if (targetIndex >= history.length - 5) return null;
+                const s = [1, 2, 3, 4].map(idx => history[targetIndex + idx].size[0]);
+                const counts = { 'Big': 0, 'Small': 0 }; let total = 0;
+                for (let i = targetIndex + 2; i < history.length - 5; i++) {
+                    if (history[i + 4].size[0] === s[3] && history[i + 3].size[0] === s[2] &&
+                        history[i + 2].size[0] === s[1] && history[i + 1].size[0] === s[0]) {
+                        counts[history[i].size]++; total++;
+                    }
+                }
+                if (total < 2) return null;
+                return counts['Big'] > counts['Small'] ? 'Big' : 'Small';
+            }
+        },
+
+        // Strategy 10: Bridge & Break Engine (Cầu & Gãy)
+        BridgePatternEngine: {
+            name: "Bridge & Break Engine",
+            predict: function (history, targetIndex) {
+                if (targetIndex >= history.length - 10) return null;
+
+                const getRecentPattern = (idx, len) => {
+                    let p = "";
+                    for (let i = 1; i <= len; i++) {
+                        p += history[idx + i].size === 'Big' ? 'B' : 'S';
+                    }
+                    return p;
+                };
+
+                // Define patterns to follow
+                const patterns = [
+                    { seq: "BBS", next: "B", name: "2-1 Big" },
+                    { seq: "SSB", next: "S", name: "2-1 Small" },
+                    { seq: "BBSS", next: "B", name: "2-2 Big" },
+                    { seq: "SSBB", next: "S", name: "2-2 Small" },
+                    { seq: "BBBS", next: "B", name: "3-1 Big" },
+                    { seq: "SSSB", next: "S", name: "3-1 Small" },
+                    { seq: "BBBSS", next: "B", name: "3-2 Big" },
+                    { seq: "SSSBB", next: "S", name: "3-2 Small" },
+                    { seq: "BBBSSS", next: "B", name: "3-3 Big" },
+                    { seq: "SSSBBB", next: "S", name: "3-3 Small" },
+                    { seq: "BBBBS", next: "B", name: "4-1 Big" },
+                    { seq: "SSSSB", next: "S", name: "4-1 Small" },
+                    { seq: "BBBBSS", next: "B", name: "4-2 Big" },
+                    { seq: "SSSSBB", next: "S", name: "4-2 Small" },
+                    { seq: "BBBBSSS", next: "B", name: "4-3 Big" },
+                    { seq: "SSSSBBB", next: "S", name: "4-3 Small" },
+                    { seq: "BBBBSSSS", next: "B", name: "4-4 Big" },
+                    { seq: "SSSSBBBB", next: "S", name: "4-4 Small" },
+                    { seq: "BBBBBS", next: "B", name: "5-1 Big" },
+                    { seq: "SSSSSBB", next: "S", name: "5-1 Small" }
+                ];
+
+                for (const p of patterns) {
+                    const len = p.seq.length;
+                    if (getRecentPattern(targetIndex, len) === p.seq) {
+                        // Logic "Gãy": Check history if this pattern usually breaks now
+                        let followCount = 0;
+                        let breakCount = 0;
+                        const searchLimit = Math.min(history.length - len - 1, 1000);
+
+                        for (let i = targetIndex + 1; i < searchLimit; i++) {
+                            if (getRecentPattern(i, len) === p.seq) {
+                                if (history[i].size[0] === p.next) followCount++;
+                                else breakCount++;
+                            }
+                        }
+
+                        // If historical breakage is high at this point, predict the break
+                        if (breakCount > followCount && breakCount > 2) {
+                            return { pred: p.next === 'B' ? 'Small' : 'Big', occurrences: followCount + breakCount, name: p.name, isBreak: true };
+                        }
+                        return { pred: p.next === 'B' ? 'Big' : 'Small', occurrences: followCount + breakCount, name: p.name, isBreak: false };
+                    }
+                }
                 return null;
             }
         }
     };
 
     function getEnsemblePrediction(history, targetIndex) {
-        if (history.length < 5) return null; // Reduced from 10 to 5
+        if (history.length < 5) return null;
         const weights = {};
         const isMainPred = targetIndex === -1;
 
-        // CORRECTION: User requested "Use All History (Max 500)".
-        // Since we now clamp history at 500, we can safely allow the AI 
-        // to scan as much as possible without lagging too much.
+        // ANALYSIS DEPTH: Consistent depth for deterministic results
         const trainStart = targetIndex + 1;
-
-        // If Main Prediction, look at EVERYTHING available (up to 500).
-        // If History Table row, increased from 50 to 100 for better coverage
-        const trainLen = isMainPred ? 450 : 100;
-
+        const trainLen = 1000; // Updated to 1000 sessions for deeper learning
         const testRange = Math.min(history.length - trainStart - 2, trainLen);
 
-        if (testRange < 3) return null; // Reduced from 5 to 3
+        // RELAX for Historical Table: If tiny history, don't just fail.
+        if (!isMainPred && testRange < 1) {
+            for (const key in Strategies) {
+                const p = Strategies[key].predict(history, targetIndex);
+                if (p) return { pred: p, confidence: 51, bestStrat: Strategies[key].name, bestScore: 0.5, details: "Baseline" };
+            }
+            return null;
+        }
+        if (testRange < 1) return null;
 
         for (const key in Strategies) {
-            let correct = 0;
-            let attempted = 0;
+            let correct = 0; let attempted = 0; let weightedScore = 0;
             for (let i = trainStart; i < trainStart + testRange; i++) {
                 const p = Strategies[key].predict(history, i);
-                const a = history[i].size;
                 if (p) {
                     attempted++;
-                    if (p === a) correct++;
+                    const recency = 1 / (1 + (i - trainStart) * 0.02);
+                    if (p === history[i].size) { correct++; weightedScore += recency; }
+                    else weightedScore -= recency * 0.8;
                 }
             }
-            const acc = attempted > 0 ? (correct / attempted) : 0;
-            weights[key] = { score: acc, games: attempted, accPct: Math.round(acc * 100) };
+            const finalScore = attempted > 0 ? Math.max(0, Math.min(1, 0.5 + (weightedScore / attempted))) : 0.5;
+            weights[key] = {
+                score: finalScore,
+                rawAcc: attempted > 0 ? (correct / attempted) : 0,
+                games: attempted,
+                accPct: Math.round((attempted > 0 ? (correct / attempted) : 0) * 100)
+            };
         }
 
-        let bigVote = 0;
-        let smallVote = 0;
-        let bestStrat = "None";
-        let bestStratScore = -1;
-        let details = "";
+        // MARKET ENTROPY (Chaos Detection)
+        let entropy = 0;
+        const entDepth = 20; // Fixed depth for entropy
+        let changes = 0;
+        const entMax = Math.min(trainStart + entDepth - 1, history.length - 1);
+        for (let i = trainStart; i < entMax; i++) if (history[i].size !== history[i + 1].size) changes++;
+        entropy = changes / entDepth;
 
+        let bigVote = 0; let smallVote = 0; let bestStrat = "None"; let bestStratScore = -1; let details = "";
+        const topStrats = [];
+
+        const scoreThreshold = 0.52; // UNIFIED THRESHOLD for total sync <!-- sync_fix -->
         for (const key in Strategies) {
-            const strat = Strategies[key];
             const weight = weights[key];
-            if (weight.games < 3 || weight.score < 0.45) continue;
-            const prediction = strat.predict(history, targetIndex);
+            if (weight.score < scoreThreshold) continue;
+
+            const prediction = Strategies[key].predict(history, targetIndex);
             if (prediction) {
-                const impact = weight.score;
-                if (prediction === 'Big') bigVote += impact;
-                else smallVote += impact;
-                if (isMainPred) details += `${strat.name} (${weight.accPct}%); `;
+                const impact = Math.pow(weight.score, 4);
+                const predValue = typeof prediction === 'object' ? prediction.pred : prediction;
+
+                if (predValue === 'Big') bigVote += impact; else smallVote += impact;
+                topStrats.push({ name: Strategies[key].name, score: weight.score, meta: prediction });
+
+                if (isMainPred) {
+                    let text = `${Strategies[key].name} (${Math.round(weight.rawAcc * 100)}%)`;
+                    if (prediction.occurrences) text += ` [Xuất hiện ${prediction.occurrences} lần]`;
+                    details += text + "; ";
+                }
+
                 if (weight.score > bestStratScore) {
                     bestStratScore = weight.score;
-                    bestStrat = strat.name;
+                    bestStrat = Strategies[key].name;
+                    if (typeof prediction === 'object') currentAiPredictionMeta = prediction;
                 }
             }
         }
 
-        const conf = Math.max(bigVote, smallVote) / (bigVote + smallVote || 1);
-        if (bigVote === 0 && smallVote === 0) return null;
+        if (bigVote === 0 && smallVote === 0) {
+            // DEEP FALLBACK: Pick the absolute best performing strategy regardless of threshold
+            let bestAnyScore = -1;
+            let fallbackPred = null;
+            let fallbackStrat = "None";
+            for (const key in Strategies) {
+                const w = weights[key];
+                const p = Strategies[key].predict(history, targetIndex);
+                if (p && w.score > bestAnyScore) {
+                    bestAnyScore = w.score;
+                    fallbackPred = p;
+                    fallbackStrat = Strategies[key].name;
+                }
+            }
+            if (fallbackPred) return {
+                pred: fallbackPred, confidence: 50, bestStrat: fallbackStrat,
+                bestScore: bestAnyScore, details: "Fast Fallback (Low Conf)"
+            };
+            return null;
+        }
+        const totalVotes = bigVote + smallVote;
+        const confRatio = Math.max(bigVote, smallVote) / totalVotes;
+
+        let finalConf = 52 + (confRatio * 48);
+        const chaosFactor = 1 - Math.abs(0.5 - entropy);
+        finalConf *= (0.65 + (chaosFactor * 0.35));
+
+        if (topStrats.length >= 3) {
+            topStrats.sort((a, b) => b.score - a.score);
+            if (topStrats[0].score > 0.8 && topStrats[1].score > 0.7) finalConf += 5;
+        }
 
         return {
             pred: bigVote > smallVote ? 'Big' : 'Small',
-            confidence: Math.round(Math.min(50 + (conf * 50), 98)),
+            confidence: Math.round(Math.min(finalConf, 99)),
             bestStrat: bestStrat,
             bestScore: bestStratScore,
             details: details
         };
     }
 
-    function evaluateAutoBet() {
+    function evaluateAutoBet(predictionResult) {
         console.log("[AutoBet] Evaluating...");
         const $toggle = $('#autoBetToggle');
         const isChecked = $toggle.is(':checked');
@@ -499,41 +749,52 @@ $(document).ready(function () {
 
         // 1. Config
         const baseAmount = parseInt($('#baseAmountInput').val()) || 1000;
-        const configStr = $('#martingaleConfig').val() || "1,2,3,8,16";
+        const configStr = $('#martingaleConfig').val() || "2,4,8,19,40,90";
         const multipliers = configStr.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
         if (multipliers.length === 0) multipliers.push(1);
 
-        // 2. Check Previous Win/Loss (if History allows)
-        if (fullGameHistory.length < 2) {
-            console.log("[AutoBet] Not enough history (<2)");
-            return;
-        }
-
+        // 2. Check Previous Win/Loss (Use ACTUAL BET data)
         const completedGame = fullGameHistory[0];
         console.log(`[AutoBet] Completed Game Issue: ${completedGame.issue}, Size: ${completedGame.size}`);
 
-        const prevPred = getEnsemblePrediction(fullGameHistory, 0); // Re-run for index 0
+        if (lastBetIssue === completedGame.issue) {
+            // Capture for Bot Notification before we overwrite lastBetIssue
+            lastFinishedBetIssue = lastBetIssue;
+            lastFinishedBetAmount = lastBetAmount;
 
-        // Logic: Did we bet on the completed game?
-        if (prevPred) {
-            const isWin = prevPred.pred === completedGame.size;
+            const isWin = lastBetType === completedGame.size;
             if (isWin) {
-                if (martingaleStep !== 0) console.log("[AutoBet] Win detected, resetting Martingale.");
-                martingaleStep = 0; // Reset
+                if (martingaleStep !== 0) console.log("[AutoBet] WIN detected on bet! Resetting Martingale.");
+                martingaleStep = 0;
+                winStreak++;
             } else {
-                if (martingaleStep < multipliers.length) console.log("[AutoBet] Loss detected, increasing Martingale.");
+                console.log("[AutoBet] LOSS detected on bet. Increasing Martingale.");
                 martingaleStep++;
-                if (martingaleStep >= multipliers.length) martingaleStep = 0;
+                if (martingaleStep >= multipliers.length) {
+                    martingaleStep = 0;
+                    winStreak = 0;
+                }
             }
+            // Clear used bet tracking to prevent double-processing same game
+            lastBetIssue = "";
         }
 
-        // 3. Predict NEXT
-        const nextPred = getEnsemblePrediction(fullGameHistory, -1);
+        // 3. Use passed prediction OR late-bound global
+        const nextPred = predictionResult || currentAiPrediction;
         if (!nextPred) {
-            console.log("[AutoBet] AI skipped: Low confidence or no pattern.");
-            $('#aiReasoning').append(" [AutoBet: Skipped (Low Conf)]");
+            console.warn("[AutoBet] AI skipped: No prediction available yet.");
             return;
         }
+
+        // DOUBLE-CHECK UI SYNC: Ensure what we are betting matches what is displayed
+        const uiDisplayedPred = $('#aiPredictSize').text().trim();
+        if (uiDisplayedPred && nextPred.pred !== uiDisplayedPred) {
+            console.error(`[AutoBet] CRITICAL SYNC ERROR: AI Result (${nextPred.pred}) != UI Display (${uiDisplayedPred}). Aborting bet.`);
+            $('#aiStatusBadge').text("SYNC ERROR").addClass('bg-danger');
+            return;
+        }
+
+        console.log(`[AutoBet] Using prediction: ${nextPred.pred} (Conf: ${nextPred.confidence || '?'}) Source: ${predictionResult ? 'Direct' : 'Global'}`);
 
         // 4. Check Duplicate
         let nextIssue = "Unknown";
@@ -549,17 +810,20 @@ $(document).ready(function () {
         const betAmount = baseAmount * multiplier;
 
         // 6. Send Request
-        // Update UI
-        console.log(`[AutoBet] EXECUTING BET: ${nextPred.pred} on ${nextIssue} amount ${betAmount}`);
-        $('#aiReasoning').append(` [AutoBet: ${nextPred.pred} ${betAmount}]`);
+        console.log(`[AutoBet] EXECUTING REQUEST: ${nextPred.pred} on ${nextIssue} (Step: ${martingaleStep})`);
+
+        // CRITICAL SYNC: Mark as bet IMMEDIATELY to prevent race conditions
+        lastBetIssue = nextIssue;
+        lastBetType = nextPred.pred;
+        lastBetAmount = betAmount;
 
         $.ajax({
             url: '/api/browser/bet',
             type: 'POST',
             contentType: 'application/json',
-            data: JSON.stringify({ type: nextPred.pred, amount: betAmount }),
+            data: JSON.stringify({ type: nextPred.pred.trim(), amount: betAmount }),
             success: function () {
-                lastBetIssue = nextIssue;
+                console.log(`[AutoBet] API SUCCESS: Bet confirmed for ${nextIssue}`);
                 const toast = `<div class="position-fixed top-0 end-0 p-3" style="z-index: 9999">
                     <div class="toast show bg-dark text-white" role="alert">
                         <div class="toast-body">
@@ -580,6 +844,7 @@ $(document).ready(function () {
 
     function updateAIPrediction() {
         const result = getEnsemblePrediction(fullGameHistory, -1);
+        currentAiPrediction = result; // SYNC SOURCE
 
         // Update Next Issue UI
         const latest = fullGameHistory[0];
@@ -602,13 +867,46 @@ $(document).ready(function () {
         $('#aiPredictParity').text(predParity).removeClass('text-danger text-success').addClass(predParity === 'Double' ? 'text-danger' : 'text-success');
         $('#aiConfidenceBar').css('width', result.confidence + '%').text(result.confidence + '%');
 
-        const summary = `Trusting: ${result.bestStrat} (${Math.round(result.bestScore * 100)}% acc).`;
-        $('#aiReasoning').text(summary).attr('title', result.details);
-        $('#aiStatusBadge').text("Self-Learning Active").removeClass('bg-dark text-warning').addClass('bg-primary text-white');
+        const isFallback = result.details.includes("Fallback");
+        let summary = `${isFallback ? '⚠️ Low Conf: ' : ''}Trusting ${result.bestStrat}`;
 
-        // TRIGGER AUTO BET
-        evaluateAutoBet();
+        if (currentAiPredictionMeta && currentAiPredictionMeta.occurrences) {
+            summary += ` (${currentAiPredictionMeta.occurrences} lần)`;
+        }
+
+        $('#aiReasoning').text(summary).attr('title', result.details);
+
+        if (isFallback) {
+            $('#aiStatusBadge').text("Low Conf / Fallback").removeClass('bg-primary').addClass('bg-warning text-dark');
+        } else {
+            $('#aiStatusBadge').text("Self-Learning Active").removeClass('bg-dark bg-warning text-dark').addClass('bg-primary text-white');
+        }
+
+        // SAVE PREDICTION SNAPSHOT
+        if (result && nextIssue !== "Unknown") {
+            // Normalize Key
+            const key = String(nextIssue).trim();
+            pendingPredictions[key] = {
+                pred: result.pred,
+                confidence: result.confidence,
+                strat: result.bestStrat,
+                ts: Date.now()
+            };
+
+            // SYNC TO SERVER FOR BOT
+            connection.invoke("SendClientPrediction", String(nextIssue).trim(), result.pred).catch(err => console.error(err));
+            // Limit pending size (keep last 50)
+            const keys = Object.keys(pendingPredictions);
+            if (keys.length > 50) delete pendingPredictions[keys[0]];
+
+            localStorage.setItem('dropAI_pending_preds', JSON.stringify(pendingPredictions));
+        }
+
+        // TRIGGER AUTO BET with the SAME prediction result
+        evaluateAutoBet(result);
     }
+
+
 
     function renderHistoryTable() {
         const $tableBody = $('#gameHistoryBody');
@@ -628,18 +926,20 @@ $(document).ready(function () {
 
         // Loop Oldest -> Newest to build the bead chain
         for (let i = calcDepth - 1; i >= 0; i--) {
-            const aiResult = getEnsemblePrediction(fullGameHistory, i);
+            // Check if we already have a prediction for this row
+            let prediction = fullGameHistory[i].aiGuess;
+            if (!prediction || prediction === '-') {
+                const aiResult = getEnsemblePrediction(fullGameHistory, i);
+                prediction = aiResult ? aiResult.pred : null;
+            }
 
-            // If no prediction possible, skip or handle? 
-            // Ideally we need continuous data. If we can't predict, we assume NO BET (Skip).
-            if (!aiResult) continue;
+            if (!prediction) continue;
 
             const actual = fullGameHistory[i].size;
-            const isWin = aiResult.pred === actual;
+            const isWin = prediction === actual;
 
             if (isWin) {
                 // WIN implies the whole session is Correct (D)
-                // Regardless if it was step 1, 2, or 3.
                 beadList.push('D');
                 currentMisses = 0; // Reset cycle
             } else {
@@ -649,22 +949,7 @@ $(document).ready(function () {
                     // 3 strikes -> Session Failed (S)
                     beadList.push('S');
                     currentMisses = 0; // Reset cycle
-                } else {
-                    // Pending misses (1 or 2). 
-                    // IMPORTANT: We do NOT push to beadList yet.
-                    // Because if next one is Win, this 'Pending' disappears and becomes 'D'.
-                    // These are only visible if we run out of history (End of Loop).
                 }
-            }
-
-            // Store for table
-            // For table, we still want to show specific result per row
-            if (isWin) {
-                resultsMap[i] = { type: 'win', step: currentMisses + 1 }; // currentMisses was just reset to 0, so this logic is tricky. 
-                // Actually, if isWin, it was a win at step (pre-reset misses + 1).
-                // But we reset it instantly.
-            } else {
-                resultsMap[i] = { type: 'loss', step: currentMisses };
             }
         }
 
@@ -674,7 +959,6 @@ $(document).ready(function () {
         }
 
         // 2. RENDER BEADS
-        // Show last 10 beads (User Request)
         const showBeads = beadList.slice(-10);
         $sessionContainer.empty();
 
@@ -686,16 +970,15 @@ $(document).ready(function () {
             let txt = b;
 
             if (b === 'D') {
-                cls = 'bg-primary text-white'; // Correct 
+                cls = 'bg-primary text-white';
                 dCount++;
             }
             else if (b === 'S') {
-                cls = 'bg-danger text-white fw-bold shadow-sm'; // Wrong
-                txt = '<i class="bi bi-x-lg"></i>'; // Animation effect? Using icon for clear S
+                cls = 'bg-danger text-white fw-bold shadow-sm';
+                txt = '<i class="bi bi-x-lg"></i>';
                 sCount++;
             }
             else {
-                // "1" or "2"
                 cls = 'bg-warning text-dark border border-dark';
             }
 
@@ -705,38 +988,32 @@ $(document).ready(function () {
         });
 
         // 3. STATS HEADER
-        // Win Rate based on D vs S
-        const totalClosedSessions = dCount + sCount; // Ignore pending 1/2
+        const totalClosedSessions = dCount + sCount;
         if (totalClosedSessions > 0) {
             const rate = Math.round((dCount / totalClosedSessions) * 100);
-            const statsBadge = `<span class="badge bg-warning text-dark me-2 border border-dark">🎯 D/S Rate: ${rate}% (${dCount}/${totalClosedSessions})</span>`;
-            $cardHeader.find('.bg-warning').remove();
+            const statsBadge = `<span class="badge bg-warning text-dark me-2 border border-dark ds-stats-badge">🎯 D/S Rate: ${rate}% (${dCount}/${totalClosedSessions})</span>`;
+            $cardHeader.find('.ds-stats-badge').remove();
             $cardHeader.prepend(statsBadge);
         }
 
-        // 4. RENDER TABLE
+        // 4. RENDER TABLE (Show stored predictions first)
         const displayList = fullGameHistory.slice(0, 500);
         displayList.forEach((item, index) => {
-            // Re-calc specific row details for visual debugging (optional) or keep simple
-            // Using basic comparison for table rows to be raw truth
-            // Note: bead logic aggregates rows, but table shows raw rows.
+            let aiGuess = item.aiGuess || '-';
+            let aiResult = item.aiResult || '-';
 
-            // Check if we calculate prediction for this row
-            let aiBadge = '<span class="text-muted small">-</span>';
-            let resBadge = '<span class="text-muted small">-</span>';
-
-            // Simple individual check for table context
-            if (index < 50 && index < fullGameHistory.length - 10) {
+            // If missing in record but in last 100 rows, try to calculate for visual (backfill)
+            if (index < 100 && (aiGuess === '-' || !aiGuess)) {
                 const p = getEnsemblePrediction(fullGameHistory, index);
                 if (p) {
-                    const isWin = p.pred === item.size;
-                    aiBadge = `<span class="badge bg-${p.pred === 'Big' ? 'danger' : 'success'} bg-opacity-75">${p.pred}</span>`;
-
-                    // For table, let's just show raw WIN/LOSS to correspond with row
-                    const c = isWin ? 'success' : 'danger';
-                    resBadge = `<span class="badge bg-${c}">${isWin ? 'OK' : 'MISS'}</span>`;
+                    aiGuess = p.pred;
+                    const isWin = aiGuess === item.size;
+                    aiResult = isWin ? 'Thắng' : 'Thua';
                 }
             }
+
+            const aiBadge = `<span class="badge bg-${aiGuess === 'Big' ? 'danger' : (aiGuess === 'Small' ? 'success' : 'secondary')} bg-opacity-75">${aiGuess}</span>`;
+            const resBadge = `<span class="badge bg-${aiResult === 'Thắng' ? 'success' : (aiResult === 'Thua' ? 'danger' : 'secondary')}">${aiResult}</span>`;
 
             const row = `
                 <tr>
@@ -887,4 +1164,6 @@ $(document).ready(function () {
     if (fullGameHistory.length > 0) {
         renderHistoryTable();
     }
+    // START CONNECTION
+    connection.start().catch(err => console.error(err));
 });

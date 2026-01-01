@@ -13,17 +13,31 @@ namespace DropAI.Services
         private IBrowserContext? _context;
         private IPage? _page;
         private readonly IHubContext<BrowserHub> _hubContext;
+        private readonly TelegramBot.TelegramBotService? _botService;
         private string? _cachedToken;
         private string? _currentIssueNumber;
         private readonly System.Net.Http.HttpClient _httpClient = new System.Net.Http.HttpClient();
+        private DateTime _lastRequestTime = DateTime.Now;
+        private DateTime _lastReloadTime = DateTime.Now;
+        private string _lastBalance = "Unknown";
+        private string? _lastProcessedIssue;
+        private System.Collections.Concurrent.ConcurrentDictionary<string, string> _aiPredictions = new();
 
         public bool IsRunning => _browser != null;
         public string Status { get; private set; } = "Ready";
 
-        public BrowserService(IHubContext<BrowserHub> hubContext)
+        public BrowserService(IHubContext<BrowserHub> hubContext, IServiceProvider sp)
         {
             _hubContext = hubContext;
+            // Optional injection to avoid circular checks if not registered
+            _botService = sp.GetService(typeof(TelegramBot.TelegramBotService)) as TelegramBot.TelegramBotService;
         }
+
+        public object? GetBotService() => _botService;
+
+        // ...
+
+
 
         public async Task StartBrowserAsync(string url, string? username = null, string? password = null)
         {
@@ -56,6 +70,7 @@ namespace DropAI.Services
             // Request Interception
             _page.Request += async (sender, request) =>
             {
+                _lastRequestTime = DateTime.Now;
                 try
                 {
                     // 1. Capture Authorization Token
@@ -162,8 +177,42 @@ namespace DropAI.Services
                                         dataEl.TryGetProperty("list", out var listEl) && 
                                         listEl.GetArrayLength() > 0)
                                      {
-                                         // Last completed issue
-                                         var lastIssue = listEl[0].GetProperty("issueNumber").GetString(); 
+                                         var top = listEl[0]; // The LATEST result
+                                         var lastIssue = top.GetProperty("issueNumber").GetString(); 
+                                         
+                                         // Safe Parsing for Number/Size (Handle String or Number types)
+                                         string lastNumber = top.TryGetProperty("number", out var numProp) ? numProp.ToString() : "?";
+                                         string lastSize = top.TryGetProperty("size", out var sizeProp) ? sizeProp.ToString() : "?";
+                                         
+                                         // Fallback: Derive Size from Number if missing
+                                         if ((lastSize == "?" || string.IsNullOrEmpty(lastSize)) && int.TryParse(lastNumber, out int numVal))
+                                         {
+                                             lastSize = numVal >= 5 ? "Big" : "Small";
+                                         }
+                                         
+                                         // NOTIFY BOT if we have a NEW result that we haven't processed yet
+                                         if (!string.IsNullOrEmpty(lastIssue) && _lastProcessedIssue != lastIssue && _botService != null)
+                                         {
+                                              _lastProcessedIssue = lastIssue; // Mark processed
+
+                                              // Look up AI prediction for this issue
+                                              string aiGuess = "-";
+                                              string aiResult = "-";
+                                              if (_aiPredictions.TryGetValue(lastIssue, out var pGen)) 
+                                              {
+                                                  aiGuess = pGen;
+                                                  // Normalize comparison
+                                                  if(aiGuess != "-" && lastSize != "?") 
+                                                  {
+                                                      aiResult = (aiGuess.Equals(lastSize, StringComparison.OrdinalIgnoreCase)) ? "HIT" : "MISS";
+                                                      if(aiGuess == "Big" && (lastNumber == "0" || lastNumber == "5")) aiResult = "MISS (0/5)";
+                                                  }
+                                              }
+
+                                              // _ = _botService.BroadcastResultAsync(...);
+                                              // REMOVED: Handled by Client (site.js NotifyBotResult)
+                                         }
+
                                          // Current betting issue is usually Next
                                          if(long.TryParse(lastIssue, out var issueVal))
                                          {
@@ -183,6 +232,16 @@ namespace DropAI.Services
                         {
                              var bodyBytes = await response.BodyAsync();
                              var bodyString = System.Text.Encoding.UTF8.GetString(bodyBytes);
+                             
+                             // Parse Balance
+                             try {
+                                 using (var doc = System.Text.Json.JsonDocument.Parse(bodyString)) {
+                                     if (doc.RootElement.TryGetProperty("data", out var data) && data.TryGetProperty("amount", out var amt)) {
+                                         _lastBalance = amt.ToString() + " đ";
+                                     }
+                                 }
+                             } catch {}
+
                              await _hubContext.Clients.All.SendAsync("ReceiveBalance", bodyString);
                         }
 
@@ -231,6 +290,10 @@ namespace DropAI.Services
                 Console.WriteLine($"[BrowserService] Error: {ex.Message}");
                 Status = "Error: " + ex.Message;
             }
+            Status = "Running";
+            _lastReloadTime = DateTime.Now; 
+            _lastRequestTime = DateTime.Now;
+            _ = MonitorTabs();
             await BroadcastStatus();
         }
 
@@ -350,51 +413,15 @@ namespace DropAI.Services
                 Status = $"API BET: {type} {amount}...";
                 await BroadcastStatus();
 
+                // Get IssueNumber
+                string issueNumber = _currentIssueNumber ?? "";
+
                 // 2. Prepare Payload
-                // Mapping: Big=1, Small=2 (WinGo 1Min)
-                // User CURL had selectType: 14. 
-                // Let's assume standard 1/2 for Big/Small first. 
-                // If 14 is "Small", then maybe 13 is "Big"?
-                // Let's TRY 1 and 2. 
-                // Mapping: Big/Small
-                // 1/2 Failed. User seen 14. 
-                // Hypoth: Big=13, Small=14. Or 11/12?
-                // Let's try 13 for Big, 14 for Small.
+                // REVERTED: User confirms original mapping was correct.
+                // Original: Big=13, Small=14.
                 int selectType = type.Equals("Big", StringComparison.OrdinalIgnoreCase) ? 13 : 14;
                 
-                // Get TypeID from URL (e.g. ...?id=1)
-                // MAPPING FIX: URL ID (1,2,3,4) != API TypeID (30,31,32,33)
-                // Log shows WinGo 1Min (ID 1) uses API TypeID 30.
-                int urlId = 1; 
-                try {
-                    var uri = new Uri(_page.Url);
-                    var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-                    if(int.TryParse(query["id"], out var idVal)) urlId = idVal;
-                    else if (uri.Fragment.Contains("id=")) {
-                        // Handle hash based routing
-                        var frag = uri.Fragment.Split('?');
-                        if(frag.Length > 1) {
-                            var q2 = System.Web.HttpUtility.ParseQueryString(frag[1]);
-                            if(int.TryParse(q2["id"], out var idVal2)) urlId = idVal2;
-                        }
-                    }
-                } catch {}
-
-                // Map URL ID to API TypeID
-                int typeId = 30; // Default WinGo 1Min
-                switch(urlId)
-                {
-                    case 1: typeId = 30; break; // 1 Min
-                    case 2: typeId = 31; break; // 3 Min
-                    case 3: typeId = 32; break; // 5 Min
-                    case 4: typeId = 33; break; // 10 Min
-                    default: typeId = 30; break;
-                }
-
-                Console.WriteLine($"[AutoBet] URL ID: {urlId} -> API TypeID: {typeId}");
-
-                // Get IssueNumber
-                string issueNumber = _currentIssueNumber;
+                Console.WriteLine($"[AutoBet] EXECUTING BET: Type={type} -> selectType={selectType}, Issue={issueNumber}, Amount={amount}");
 
                 // Fallback to UI scraping if API spy hasn't caught it yet
                 if (string.IsNullOrEmpty(issueNumber))
@@ -426,6 +453,34 @@ namespace DropAI.Services
                     await BroadcastStatus();
                     return;
                 }
+
+                // Get TypeID from URL (e.g. ...?id=1)
+                int urlId = 1; 
+                try {
+                    var uri = new Uri(_page!.Url);
+                    var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+                    if(int.TryParse(query["id"], out var idVal)) urlId = idVal;
+                    else if (uri.Fragment.Contains("id=")) {
+                        var frag = uri.Fragment.Split('?');
+                        if(frag.Length > 1) {
+                            var q2 = System.Web.HttpUtility.ParseQueryString(frag[1]);
+                            if(int.TryParse(q2["id"], out var idVal2)) urlId = idVal2;
+                        }
+                    }
+                } catch {}
+
+                // Map URL ID to API TypeID
+                int typeId = 30; // Default WinGo 1Min
+                switch(urlId)
+                {
+                    case 1: typeId = 30; break; 
+                    case 2: typeId = 31; break; 
+                    case 3: typeId = 32; break; 
+                    case 4: typeId = 33; break; 
+                    default: typeId = 30; break;
+                }
+
+                Console.WriteLine($"[AutoBet] URL ID: {urlId} -> API TypeID: {typeId}");
 
                 // 3. Prepare Payload
                 // Log: Manual bet uses Integers. Reverting String change.
@@ -575,6 +630,55 @@ namespace DropAI.Services
             return "{" + string.Join(",", entries) + "}";
         }
 
+        private async Task MonitorTabs()
+        {
+            Console.WriteLine("[AutoReload] Monitoring started.");
+            while (IsRunning)
+            {
+                await Task.Delay(5000); // Check every 5s
+                if (_page == null) continue;
+
+                var now = DateTime.Now;
+                bool reloadNeeded = false;
+                string reason = "";
+
+                // 1. Inactivity (45s)
+                if ((now - _lastRequestTime).TotalSeconds > 45)
+                {
+                    reloadNeeded = true;
+                    reason = "Inactivity (45s)";
+                }
+
+                // 2. Periodic (20s)
+                if ((now - _lastReloadTime).TotalSeconds > 20)
+                {
+                    reloadNeeded = true;
+                    reason = "Periodic (20s)";
+                }
+
+                if (reloadNeeded)
+                {
+                    Console.WriteLine($"[AutoReload] Triggering reload due to: {reason}");
+                    Status = $"Auto Reload: {reason}";
+                    await BroadcastStatus();
+                    
+                    try 
+                    {
+                        await _page.ReloadAsync();
+                        _lastReloadTime = DateTime.Now;
+                        _lastRequestTime = DateTime.Now;
+                        Status = "Running";
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[AutoReload] Error: {ex.Message}");
+                    }
+                    await BroadcastStatus();
+                }
+            }
+            Console.WriteLine("[AutoReload] Monitoring stopped.");
+        }
+
         public async Task StopBrowserAsync()
         {
             Status = "Stopping...";
@@ -644,6 +748,12 @@ namespace DropAI.Services
              {
                  Console.WriteLine($"[SigTest] Error: {ex.Message}");
              }
+        }
+
+        public void StorePrediction(string issue, string guess)
+        {
+            _aiPredictions[issue] = guess;
+            Console.WriteLine($"[BrowserService] Stored Prediction: {issue} -> {guess}");
         }
 
         private string CreateMD5(string input)

@@ -7,64 +7,96 @@ namespace DropAI.Controllers
     [Route("api/[controller]")]
     public class BrowserController : ControllerBase
     {
-        private readonly BrowserService _browserService;
+        private readonly GameApiService _gameApiService;
 
-        public BrowserController(BrowserService browserService)
+        public BrowserController(GameApiService gameApiService)
         {
-            _browserService = browserService;
+            _gameApiService = gameApiService;
         }
 
         [HttpPost("start")]
         public async Task<IActionResult> Start([FromBody] StartRequest request)
         {
-            if (string.IsNullOrWhiteSpace(request.Url))
+            if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
             {
-                return BadRequest("URL is required.");
+                return BadRequest("Username and Password are required for API login.");
+            }
+            // Perform login
+            var loginSuccess = await _gameApiService.LoginAsync(request.Username, request.Password);
+            if (!loginSuccess)
+            {
+                return BadRequest("Login failed through Game API.");
             }
 
-            await _browserService.StartBrowserAsync(request.Url, request.Username, request.Password);
-            return Ok(new { status = _browserService.Status });
+            return Ok(new { status = "success", message = "Browser session started and Game API logged in." });
         }
 
         [HttpPost("navigate")]
-        public async Task<IActionResult> Navigate([FromBody] StartRequest request)
+        public IActionResult Navigate([FromBody] StartRequest request)
         {
-            if (string.IsNullOrWhiteSpace(request.Url)) return BadRequest("URL required");
-            await _browserService.NavigateAsync(request.Url);
-            await _browserService.NavigateAsync(request.Url);
-            return Ok(new { status = _browserService.Status });
+             // Detect ID from URL (e.g. ...id=1)
+             int urlId = 1;
+             if (!string.IsNullOrEmpty(request.Url))
+             {
+                 try {
+                     var uri = new Uri(request.Url);
+                     var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+                     if(int.TryParse(query["id"], out var idVal)) urlId = idVal;
+                     else if (uri.Fragment.Contains("id=")) {
+                        var frag = uri.Fragment.Split('?');
+                        if(frag.Length > 1) {
+                            var q2 = System.Web.HttpUtility.ParseQueryString(frag[1]);
+                            if(int.TryParse(q2["id"], out var idVal2)) urlId = idVal2;
+                        }
+                     }
+                 } catch {}
+             }
+
+             int apiTypeId = 30;
+             switch(urlId) {
+                case 1: apiTypeId = 30; break;
+                case 2: apiTypeId = 31; break;
+                case 3: apiTypeId = 32; break;
+                case 4: apiTypeId = 33; break;
+             }
+
+             _gameApiService.CurrentGameId = apiTypeId;
+             return Ok(new { status = $"Switched to Game ID: {apiTypeId}" });
         }
 
         [HttpPost("click")]
-        public async Task<IActionResult> Click([FromBody] StartRequest request)
+        public IActionResult Click([FromBody] StartRequest request)
         {
-            // Reusing StartRequest for simplicity as it has a generic string field we can use (Url -> Selector)
-            // Or create a new DTO. Let's reuse Url as 'Selector' to be quick and simple or add a property.
-            // Using 'Url' property to pass the selector string for now.
-             if (string.IsNullOrWhiteSpace(request.Url)) return BadRequest("Selector required (passed in Url field)");
-            await _browserService.ClickAsync(request.Url);
-            return Ok(new { status = _browserService.Status });
+            // Dummy for API mode
+            return Ok(new { status = "Click ignored in API mode" });
         }
 
         [HttpPost("bet")]
         public async Task<IActionResult> Bet([FromBody] BetRequest request)
         {
             if (string.IsNullOrWhiteSpace(request.Type)) return BadRequest("Type required");
-            await _browserService.PlaceBetAsync(request.Type, request.Amount);
-            return Ok(new { status = _browserService.Status });
+            var result = await _gameApiService.PlaceBetAsync(request.Type, request.Amount, _gameApiService.CurrentGameId);
+            if (result.Success)
+            {
+                return Ok(new { status = $"Bet Placed: {request.Type} {request.Amount}", issue = result.IssueNumber });
+            }
+            else
+            {
+                return BadRequest(new { status = "Bet Failed", error = result.ErrorMessage });
+            }
         }
 
         [HttpPost("stop")]
-        public async Task<IActionResult> Stop()
+        public IActionResult Stop()
         {
-            await _browserService.StopBrowserAsync();
-            return Ok(new { status = _browserService.Status });
+            _gameApiService.StopPolling();
+            return Ok(new { status = "Polling Stopped" });
         }
 
         [HttpGet("status")]
         public IActionResult GetStatus()
         {
-            return Ok(new { status = _browserService.Status });
+            return Ok(new { status = _gameApiService.Status });
         }
     }
 

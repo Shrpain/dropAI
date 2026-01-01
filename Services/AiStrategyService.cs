@@ -1,0 +1,359 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace DropAI.Services
+{
+    public class AiPrediction
+    {
+        public string Pred { get; set; } = "";
+        public int Confidence { get; set; }
+        public string BestStrat { get; set; } = "None";
+        public double BestScore { get; set; }
+        public string Details { get; set; } = "";
+        public int Occurrences { get; set; } // Added for pattern tracking
+    }
+
+    public class AiStrategyService
+    {
+        public static AiPrediction? EnsemblePredict(List<GameHistoryItem> history, int targetIndex = -1)
+        {
+            if (history.Count < 5) return null;
+
+            var strategies = new Dictionary<string, Func<List<GameHistoryItem>, int, object?>>
+            {
+                { "Streak", PredictStreak },
+                { "ZigZag", PredictZigZag },
+                { "Frequency", PredictFrequency },
+                { "SmartBridge", PredictSmartBridge },
+                { "Mirror", PredictMirror },
+                { "Neural", PredictNeural },
+                { "Wave", PredictWave },
+                { "Bayesian", PredictBayesian },
+                { "MarkovO4", PredictMarkovO4 },
+                { "BridgeBreak", PredictBridgeBreak }
+            };
+
+            var weights = new Dictionary<string, double>();
+            int trainStart = targetIndex + 1;
+            int trainLen = 1000;
+            int testRange = Math.Min(history.Count - trainStart - 2, trainLen);
+
+            if (testRange < 1)
+            {
+                foreach (var strat in strategies)
+                {
+                    var p = strat.Value(history, targetIndex);
+                    if (p != null) {
+                        string predValue = p is string s ? s : ((dynamic)p).Pred;
+                        return new AiPrediction { Pred = predValue, Confidence = 51, BestStrat = strat.Key, Details = "Baseline" };
+                    }
+                }
+                return null;
+            }
+
+            foreach (var strat in strategies)
+            {
+                double correct = 0;
+                int attempted = 0;
+                double weightedScore = 0;
+
+                for (int i = trainStart; i < trainStart + testRange; i++)
+                {
+                    var p = strat.Value(history, i);
+                    if (p != null)
+                    {
+                        attempted++;
+                        double recency = 1.0 / (1.0 + (i - trainStart) * 0.02);
+                        string predValue = p is string s ? s : ((dynamic)p).Pred;
+                        if (predValue == history[i].Size) { correct++; weightedScore += recency; }
+                        else weightedScore -= recency * 0.8;
+                    }
+                }
+                double finalScore = attempted > 0 ? Math.Max(0, Math.Min(1, 0.5 + (weightedScore / attempted))) : 0.5;
+                weights[strat.Key] = finalScore;
+            }
+
+            // Entropy (Chaos)
+            int changes = 0;
+            int entDepth = 20;
+            int entMax = Math.Min(trainStart + entDepth - 1, history.Count - 1);
+            for (int i = trainStart; i < entMax; i++) if (history[i].Size != history[i + 1].Size) changes++;
+            double entropy = (double)changes / entDepth;
+
+            double bigVote = 0;
+            double smallVote = 0;
+            string bestStrat = "None";
+            double bestStratScore = -1;
+            string details = "";
+            object? bestMeta = null;
+
+            double threshold = 0.52;
+            foreach (var strat in strategies)
+            {
+                double score = weights[strat.Key];
+                if (score < threshold) continue;
+
+                var prediction = strat.Value(history, targetIndex);
+                if (prediction != null)
+                {
+                    double impact = Math.Pow(score, 4);
+                    string predValue = prediction is string s ? s : ((dynamic)prediction).Pred;
+                    
+                    if (predValue == "Big") bigVote += impact; else smallVote += impact;
+                    
+                    string text = $"{strat.Key}({Math.Round(score * 100)}%)";
+                    if (prediction is not string && ((dynamic)prediction).Occurrences > 0) 
+                        text += $"[{((dynamic)prediction).Occurrences}]";
+                    
+                    details += text + "; ";
+                    
+                    if (score > bestStratScore) { 
+                        bestStratScore = score; 
+                        bestStrat = strat.Key; 
+                        bestMeta = prediction;
+                    }
+                }
+            }
+
+            if (bigVote == 0 && smallVote == 0)
+            {
+                double bestAny = -1;
+                object? fallbackPred = null;
+                string fallbackStrat = "None";
+                foreach (var strat in strategies)
+                {
+                    var p = strat.Value(history, targetIndex);
+                    if (p != null && weights[strat.Key] > bestAny)
+                    {
+                        bestAny = weights[strat.Key];
+                        fallbackPred = p;
+                        fallbackStrat = strat.Key;
+                    }
+                }
+                if (fallbackPred != null) {
+                    string predValue = fallbackPred is string s ? s : ((dynamic)fallbackPred).Pred;
+                    int occ = fallbackPred is string ? 0 : ((dynamic)fallbackPred).Occurrences;
+                    return new AiPrediction { Pred = predValue, Confidence = 50, BestStrat = fallbackStrat, BestScore = bestAny, Details = "Fallback", Occurrences = occ };
+                }
+                return null;
+            }
+
+            double totalVotes = bigVote + smallVote;
+            double confRatio = Math.Max(bigVote, smallVote) / totalVotes;
+            double finalConf = 52 + (confRatio * 48);
+            double chaosFactor = 1 - Math.Abs(0.5 - entropy);
+            finalConf *= (0.65 + (chaosFactor * 0.35));
+
+            int finalOccur = (bestMeta != null && bestMeta is not string) ? ((dynamic)bestMeta).Occurrences : 0;
+
+            return new AiPrediction
+            {
+                Pred = bigVote > smallVote ? "Big" : "Small",
+                Confidence = (int)Math.Round(Math.Min(finalConf, 99)),
+                BestStrat = bestStrat,
+                BestScore = bestStratScore,
+                Details = details,
+                Occurrences = finalOccur
+            };
+        }
+
+        #region Strategies
+
+        private static string? PredictStreak(List<GameHistoryItem> history, int index)
+        {
+            if (index >= history.Count - 1) return null;
+            var prev = history[index + 1];
+            int s = 1;
+            for (int i = index + 2; i < history.Count; i++)
+            {
+                if (history[i].Size == prev.Size) s++;
+                else break;
+            }
+            if (s >= 2) return prev.Size;
+            return null;
+        }
+
+        private static string? PredictZigZag(List<GameHistoryItem> history, int index)
+        {
+            if (index >= history.Count - 2) return null;
+            var p1 = history[index + 1];
+            var p2 = history[index + 2];
+            if (p1.Size != p2.Size) return p1.Size == "Big" ? "Small" : "Big";
+            return null;
+        }
+
+        private static string? PredictFrequency(List<GameHistoryItem> history, int index)
+        {
+            int big = 0; int total = 0;
+            for (int i = index + 1; i < Math.Min(history.Count, index + 21); i++)
+            {
+                if (history[i].Size == "Big") big++;
+                total++;
+            }
+            if (total < 5) return null;
+            double ratio = (double)big / total;
+            if (ratio > 0.6) return "Big";
+            if (ratio < 0.4) return "Small";
+            return null;
+        }
+
+        private static string? PredictSmartBridge(List<GameHistoryItem> history, int index)
+        {
+            if (index >= history.Count - 8) return null;
+            int bigVote = 0; int smallVote = 0; int matches = 0;
+            int[] lengths = { 3, 4, 5, 6 };
+            foreach (int len in lengths)
+            {
+                string sig = "";
+                for (int i = 1; i <= len; i++) sig += history[index + i].Size[0].ToString();
+                for (int i = index + 2; i < history.Count - len; i++)
+                {
+                    bool match = true;
+                    for (int k = 0; k < len; k++) if (history[i + k].Size[0] != sig[k]) { match = false; break; }
+                    if (match) { 
+                        if (history[i - 1].Size == "Big") bigVote++; else smallVote++;
+                        matches++;
+                    }
+                }
+            }
+            if (matches < 3) return null;
+            if ((double)bigVote / matches > 0.7) return "Big";
+            if ((double)smallVote / matches > 0.7) return "Small";
+            return null;
+        }
+
+        private static string? PredictMirror(List<GameHistoryItem> history, int index)
+        {
+            if (index >= history.Count - 2) return null;
+            return history[index + 2].Size;
+        }
+
+        private static string? PredictNeural(List<GameHistoryItem> history, int index)
+        {
+            for (int len = 24; len >= 4; len--)
+            {
+                if (index >= history.Count - len - 1) continue;
+                string sig = "";
+                for (int i = 1; i <= len; i++) sig += history[index + i].Size[0].ToString();
+                for (int i = index + 2; i < history.Count - len; i++)
+                {
+                    bool match = true;
+                    for (int k = 0; k < len; k++) if (history[i + k].Size[0] != sig[k]) { match = false; break; }
+                    if (match) return history[i - 1].Size;
+                }
+            }
+            return null;
+        }
+
+        private static string? PredictWave(List<GameHistoryItem> history, int index)
+        {
+            if (index >= history.Count - 20) return null;
+            var wave = new List<int>();
+            for (int i = index + 1; i < index + 31 && i < history.Count; i++) wave.Add(history[i].Size == "Big" ? 1 : -1);
+            int bestP = -1; double maxC = -1;
+            for (int p = 1; p <= 12; p++)
+            {
+                int corr = 0; int count = 0;
+                for (int i = 0; i < wave.Count - p; i++) { if (wave[i] == wave[i + p]) corr++; count++; }
+                if (count > 0 && (double)corr / count > maxC) { maxC = (double)corr / count; bestP = p; }
+            }
+            if (maxC > 0.72 && bestP > 0) return history[index + bestP].Size;
+            return null;
+        }
+
+        private static string? PredictBayesian(List<GameHistoryItem> history, int index)
+        {
+            if (history.Count < 100) return null;
+            string seq = string.Join("", history.Skip(index + 1).Take(9).Select(x => x.Size[0]));
+            int big = 0; int small = 0;
+            for (int i = index + 11; i < history.Count - 9; i++)
+            {
+                int m = 0;
+                for (int k = 0; k < 9; k++) if (history[i + k].Size[0] == seq[k]) m++;
+                if (m >= 7) { if (history[i - 1].Size == "Big") big += m; else small += m; }
+            }
+            if (big == 0 && small == 0) return null;
+            return big > small ? "Big" : "Small";
+        }
+
+        private static string? PredictMarkovO4(List<GameHistoryItem> history, int index)
+        {
+            if (index >= history.Count - 5) return null;
+            string s = string.Join("", history.Skip(index + 1).Take(4).Select(x => x.Size[0]));
+            int big = 0; int small = 0; int total = 0;
+            for (int i = index + 2; i < history.Count - 5; i++)
+            {
+                if (history[i + 3].Size[0] == s[3] && history[i + 2].Size[0] == s[2] && history[i + 1].Size[0] == s[1] && history[i].Size[0] == s[0])
+                {
+                    if (history[i - 1].Size == "Big") big++; else small++;
+                    total++;
+                }
+            }
+            if (total < 2) return null;
+            return big > small ? "Big" : "Small";
+        }
+
+        private static object? PredictBridgeBreak(List<GameHistoryItem> history, int targetIndex)
+        {
+            if (targetIndex >= history.Count - 10) return null;
+
+            Func<int, int, string> getRecentPattern = (idx, len) => {
+                var p = "";
+                for (int i = 1; i <= len; i++) p += history[idx + i].Size == "Big" ? "B" : "S";
+                return p;
+            };
+
+            var patterns = new[] {
+                new { seq = "BBS", next = "B", name = "2-1 Big" },
+                new { seq = "SSB", next = "S", name = "2-1 Small" },
+                new { seq = "BBSS", next = "B", name = "2-2 Big" },
+                new { seq = "SSBB", next = "S", name = "2-2 Small" },
+                new { seq = "BBBS", next = "B", name = "3-1 Big" },
+                new { seq = "SSSB", next = "S", name = "3-1 Small" },
+                new { seq = "BBBSS", next = "B", name = "3-2 Big" },
+                new { seq = "SSSBB", next = "S", name = "3-2 Small" },
+                new { seq = "BBBSSS", next = "B", name = "3-3 Big" },
+                new { seq = "SSSBBB", next = "S", name = "3-3 Small" },
+                new { seq = "BBBBS", next = "B", name = "4-1 Big" },
+                new { seq = "SSSSB", next = "S", name = "4-1 Small" },
+                new { seq = "BBBBSS", next = "B", name = "4-2 Big" },
+                new { seq = "SSSSBB", next = "S", name = "4-2 Small" },
+                new { seq = "BBBBSSS", next = "B", name = "4-3 Big" },
+                new { seq = "SSSSBBB", next = "S", name = "4-3 Small" },
+                new { seq = "BBBBSSSS", next = "B", name = "4-4 Big" },
+                new { seq = "SSSSBBBB", next = "S", name = "4-4 Small" },
+                new { seq = "BBBBBS", next = "B", name = "5-1 Big" },
+                new { seq = "SSSSSBB", next = "S", name = "5-1 Small" }
+            };
+
+            foreach (var p in patterns)
+            {
+                int len = p.seq.Length;
+                if (getRecentPattern(targetIndex, len) == p.seq)
+                {
+                    int followCount = 0;
+                    int breakCount = 0;
+                    int searchLimit = Math.Min(history.Count - len - 1, 1000);
+
+                    for (int i = targetIndex + 1; i < searchLimit; i++)
+                    {
+                        if (getRecentPattern(i, len) == p.seq)
+                        {
+                            if (history[i].Size[0].ToString() == p.next) followCount++;
+                            else breakCount++;
+                        }
+                    }
+
+                    if (breakCount > followCount && breakCount > 2)
+                        return new { Pred = p.next == "B" ? "Small" : "Big", Occurrences = followCount + breakCount };
+                    
+                    return new { Pred = p.next == "B" ? "Big" : "Small", Occurrences = followCount + breakCount };
+                }
+            }
+            return null;
+        }
+
+        #endregion
+    }
+}
