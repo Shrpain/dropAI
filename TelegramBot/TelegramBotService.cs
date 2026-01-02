@@ -79,6 +79,7 @@ namespace DropAI.TelegramBot
                 if (message.Text is not { } text) return;
 
                 var chatId = message.Chat.Id;
+                //_activeChats.TryAdd(chatId, chatId); // Auto-subscribe on any message
                 Console.WriteLine($"[TelegramBot] [MSG] From {chatId} (@{message.From?.Username}): {text}");
 
                 text = text.Trim();
