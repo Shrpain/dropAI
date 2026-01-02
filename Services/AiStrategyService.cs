@@ -13,11 +13,12 @@ namespace DropAI.Services
         public string Details { get; set; } = "";
         public int Occurrences { get; set; }
         public string Reason { get; set; } = ""; // Human-readable reasoning
+        public List<string> ProjectedPath { get; set; } = new List<string>(); // Next 5 steps
     }
 
     public class AiStrategyService
     {
-        public static AiPrediction? EnsemblePredict(List<GameHistoryItem> history, int targetIndex = -1)
+        public static AiPrediction? EnsemblePredict(List<GameHistoryItem> history, int targetIndex = -1, bool projectPath = true)
         {
             if (history.Count < 5) return null;
 
@@ -134,15 +135,15 @@ namespace DropAI.Services
                     }
                 }
                 if (fallbackPred != null) {
-                    string predValue = fallbackPred is string s ? s : ((dynamic)fallbackPred).Pred;
-                    int occ = fallbackPred is string ? 0 : ((dynamic)fallbackPred).Occurrences;
+                    string predValue = fallbackPred is string s ? s : GetDynamicProp(fallbackPred, "Pred", "-");
+                    int occ = fallbackPred is string ? 0 : GetDynamicProp(fallbackPred, "Occurrences", 0);
                     return new AiPrediction { Pred = predValue, Confidence = 50, BestStrat = fallbackStrat, BestScore = bestAny, Details = "Fallback", Occurrences = occ };
                 }
                 return null;
             }
 
             double totalVotes = bigVote + smallVote;
-            double confRatio = Math.Max(bigVote, smallVote) / totalVotes;
+            double confRatio = totalVotes > 0 ? Math.Max(bigVote, smallVote) / totalVotes : 0.5;
             double finalConf = 52 + (confRatio * 48);
             double chaosFactor = 1 - Math.Abs(0.5 - entropy);
             finalConf *= (0.65 + (chaosFactor * 0.35));
@@ -150,7 +151,7 @@ namespace DropAI.Services
             int finalOccur = GetDynamicProp(bestMeta, "Occurrences", 0);
             string finalReason = GetDynamicProp(bestMeta, "Reason", GetDefaultReason(bestStrat));
 
-            return new AiPrediction
+            var result = new AiPrediction
             {
                 Pred = bigVote > smallVote ? "Big" : "Small",
                 Confidence = (int)Math.Round(Math.Min(finalConf, 99)),
@@ -160,6 +161,44 @@ namespace DropAI.Services
                 Occurrences = finalOccur,
                 Reason = finalReason
             };
+
+            // Recursively predict path if this is the top-level call
+            if (projectPath && targetIndex == -1)
+            {
+                result.ProjectedPath = PredictPath(history, 5);
+            }
+
+            return result;
+        }
+
+        public static List<string> PredictPath(List<GameHistoryItem> history, int steps)
+        {
+            var path = new List<string>();
+            var tempHistory = new List<GameHistoryItem>(history);
+
+            for (int i = 0; i < steps; i++)
+            {
+                // Call EnsemblePredict with projectPath = false to avoid recursion
+                var p = EnsemblePredict(tempHistory, -1, false);
+                if (p != null)
+                {
+                    path.Add(p.Pred);
+                    // Add a mock result to history for next step prediction
+                    var mock = new GameHistoryItem
+                    {
+                        IssueNumber = (long.Parse(tempHistory[0].IssueNumber) + 1).ToString(),
+                        Size = p.Pred,
+                        Number = p.Pred == "Big" ? 7 : 2, // Mock number
+                        Parity = (i % 2 == 0) ? "Single" : "Double" // Mock parity
+                    };
+                    tempHistory.Insert(0, mock);
+                }
+                else
+                {
+                    path.Add("-");
+                }
+            }
+            return path;
         }
 
         private static T GetDynamicProp<T>(object? obj, string propName, T defaultValue)

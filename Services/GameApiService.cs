@@ -779,7 +779,15 @@ namespace DropAI.Services
 
             // Hack: Append footer prediction to betAmount string so it appears in the message
             string footerReason = nextPred != null && !string.IsNullOrEmpty(nextPred.Reason) ? $"\n💡 *Lý do:* {nextPred.Reason}" : "";
-            string footerPrediction = nextPred != null ? $"🔮 *Dự đoán tiếp:* {nextPred.Pred} ({nextPred.Confidence}%){footerReason}" : "";
+            
+            string pathStr = "";
+            if (nextPred != null && nextPred.ProjectedPath != null && nextPred.ProjectedPath.Count > 0)
+            {
+                var pathDisplay = nextPred.ProjectedPath.Select(p => p == "Big" ? "L" : (p == "Small" ? "N" : p));
+                pathStr = $"\n🔭 *Dự báo 5 ván tới:* {string.Join(" -> ", pathDisplay)}";
+            }
+
+            string footerPrediction = nextPred != null ? $"🔮 *Dự đoán tiếp:* {nextPred.Pred} ({nextPred.Confidence}%){footerReason}{pathStr}" : "";
             string betWithFooter = $"{betAmtStr}\n\n{footerPrediction}";
 
             // Call updated 10-arg method
