@@ -11,17 +11,21 @@ export DOTNET_EnableWriteXorExecute=0
 export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 export COMPlus_EnableDiagnostics=0
 
-# 2. Pull latest code
+# 2. Cleanup existing processes to free RAM
+echo "🧹 Đang dọn dẹp bộ nhớ..."
+pkill -f DropAI || true
+
+# 3. Pull latest code
 echo "🚀 Đang lấy code mới từ GitHub..."
 git reset --hard
 git pull origin main
 
-# 3. Build/Publish (Stable)
-echo "🔨 Đang biên dịch bản ổn định (Publish)..."
+# 4. Build/Publish (Conservative mode to save RAM)
+echo "🔨 Đang biên dịch (Chế độ tiết kiệm RAM)..."
 rm -rf ./out
-dotnet publish -c Release -o ./out
+dotnet publish -c Release -o ./out -p:Parallel=false -p:TieredCompilation=false
 
-# 4. Check if build success
+# 5. Check if build success
 if [ -f "./out/DropAI" ]; then
     echo "✅ Hoàn tất! Khởi động Bot..."
     chmod +x ./out/DropAI
