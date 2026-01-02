@@ -164,11 +164,14 @@ namespace DropAI.TelegramBot
                     var balance = await api.GetBalanceAsync();
                     var saved = api.GetSavedLogin();
                     
+                    string mode = api.UseExternalSignal ? "📡 Tín hiệu ngoài" : "🤖 AI nội bộ";
+                    
                     await bot.SendTextMessageAsync(chatId, 
                         $"📊 *TRẠNG THÁI HỆ THỐNG*\n" +
                         $"👤 *Tài khoản:* `{saved?.User ?? "N/A"}` ({loginStatus})\n" +
                         $"💰 *Số dư:* `{balance:N0} đ`\n" +
                         $"🤖 *Tự động:* {autoBet}\n" +
+                        $"🎯 *Chế độ dự đoán:* {mode}\n" +
                         $"💵 *Cược gốc:* `{api.BaseAmount:N0} đ`\n" +
                         $"📈 *Chuỗi thắng:* {api.WinStreak} ván\n" +
                         $"⚙ *Dãy cược:* `{string.Join(", ", api.MartingaleConfig)}`",
@@ -184,6 +187,40 @@ namespace DropAI.TelegramBot
                 {
                     api.IsAutoBetEnabled = false; 
                     await bot.SendTextMessageAsync(chatId, "❌ Đã TẮT tự động đặt cược.", replyMarkup: GetMainMenu(api.GetSavedLogin()?.User));
+                }
+                else if (lowerText.StartsWith("/mode"))
+                {
+                    var parts = text.Split(' ');
+                    if (parts.Length < 2)
+                    {
+                        string currentMode = api.UseExternalSignal ? "external" : "ai";
+                        await bot.SendTextMessageAsync(chatId, 
+                            $"🤖 *Chế độ hiện tại:* `{currentMode}`\n\n" +
+                            $"📝 *Cú pháp:*\n" +
+                            $"`/mode ai` - Sử dụng AI nội bộ\n" +
+                            $"`/mode external` - Sử dụng tín hiệu từ @tinhieu168",
+                            parseMode: ParseMode.Markdown);
+                        return;
+                    }
+
+                    string mode = parts[1].ToLower();
+                    if (mode == "ai")
+                    {
+                        api.UseExternalSignal = false;
+                        await bot.SendTextMessageAsync(chatId, "✅ Đã chuyển sang chế độ *AI nội bộ*", parseMode: ParseMode.Markdown);
+                    }
+                    else if (mode == "external")
+                    {
+                        api.UseExternalSignal = true;
+                        await bot.SendTextMessageAsync(chatId, 
+                            "✅ Đã chuyển sang chế độ *Tín hiệu ngoài*\n\n" +
+                            "📡 Bot sẽ theo dõi channel @tinhieu168 và đặt cược theo tín hiệu của họ.",
+                            parseMode: ParseMode.Markdown);
+                    }
+                    else
+                    {
+                        await bot.SendTextMessageAsync(chatId, "⚠️ Mode không hợp lệ. Chọn `ai` hoặc `external`", parseMode: ParseMode.Markdown);
+                    }
                 }
                 else if (lowerText.StartsWith("🔐 đăng nhập lại"))
                 {

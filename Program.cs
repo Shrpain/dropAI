@@ -5,6 +5,7 @@ builder.Services.AddRazorPages();
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<DropAI.Services.GameApiService>();
+builder.Services.AddSingleton<DropAI.Services.ExternalSignalService>();
 // builder.Services.AddSingleton<DropAI.Services.BrowserService>();
 
 // Telegram Bot Service

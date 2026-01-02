@@ -45,10 +45,15 @@ namespace DropAI.Services
 
         private System.Collections.Concurrent.ConcurrentDictionary<string, AiPrediction> _aiPredictions = new();
 
-        public GameApiService(Microsoft.AspNetCore.SignalR.IHubContext<DropAI.Hubs.BrowserHub> hubContext, DropAI.TelegramBot.TelegramBotService botService)
+        // EXTERNAL SIGNAL MODE
+        private readonly ExternalSignalService _externalSignalService;
+        public bool UseExternalSignal { get; set; } = false;
+
+        public GameApiService(Microsoft.AspNetCore.SignalR.IHubContext<DropAI.Hubs.BrowserHub> hubContext, DropAI.TelegramBot.TelegramBotService botService, ExternalSignalService externalSignalService)
         {
             _hubContext = hubContext;
             _botService = botService;
+            _externalSignalService = externalSignalService;
             _httpClient = new HttpClient();
             ConfigureHttpClient();
         }
@@ -146,14 +151,24 @@ namespace DropAI.Services
                             {
                                  _lastProcessedResultIssue = latest.IssueNumber;
 
-                                // 1. Run AI
-                                _currentPrediction = AiStrategyService.EnsemblePredict(history);
+                                // 1. Run AI or get External Signal
+                                string nextIssue = (long.Parse(latest.IssueNumber) + 1).ToString();
+                                
+                                if (UseExternalSignal)
+                                {
+                                    _currentPrediction = _externalSignalService.GetLatestSignal(nextIssue);
+                                    if (_currentPrediction == null)
+                                    {
+                                        Console.WriteLine($"⚠️ External signal not available for issue {nextIssue}, falling back to AI");
+                                        _currentPrediction = AiStrategyService.EnsemblePredict(history);
+                                    }
+                                }
+                                else
+                                {
+                                    _currentPrediction = AiStrategyService.EnsemblePredict(history);
+                                }
                                 
                                 // STORE PREDICTION FOR HISTORY MAPPING
-                                // The prediction we just made is for the NEXT issue.
-                                // history[0].IssueNumber is the latest result (e.g. 080).
-                                // So this prediction is for 081.
-                                string nextIssue = (long.Parse(latest.IssueNumber) + 1).ToString();
                                 _aiPredictions[nextIssue] = _currentPrediction ?? new AiPrediction { Pred = "-" };
 
                                 // 2. Evaluate AutoBet
