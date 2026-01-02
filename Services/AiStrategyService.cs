@@ -101,7 +101,9 @@ namespace DropAI.Services
                 if (prediction != null)
                 {
                     double impact = Math.Pow(score, 4);
-                    string predValue = prediction is string s ? s : ((dynamic)prediction).Pred;
+                    if (strat.Key == "Symmetry") impact *= 2.0; // Ưu tiên tuyệt đối khi bắt được cầu
+                    
+                    string predValue = prediction is string s ? s : GetDynamicProp(prediction, "Pred", "-");
                     
                     if (predValue == "Big") bigVote += impact; else smallVote += impact;
                     
@@ -317,8 +319,8 @@ namespace DropAI.Services
             
             if (sig == "BBSSBB") return new { Pred = "Small", Reason = "Đối xứng L-L-N-N-L-L", Occurrences = 1 };
             if (sig == "SSBBSS") return new { Pred = "Big", Reason = "Đối xứng N-N-L-L-N-N", Occurrences = 1 };
-            if (sig == "BBSBBS") return new { Pred = "Small", Reason = "Cầu 2-1 (L-L-N)", Occurrences = 2 };
-            if (sig == "SSBSSB") return new { Pred = "Big", Reason = "Cầu 2-1 (N-N-L)", Occurrences = 2 };
+            if (sig == "BSBSBS") return new { Pred = "Big", Reason = "Cầu 1-1 (N-L-N-L-N-L)", Occurrences = 3 };
+            if (sig == "SBSBSB") return new { Pred = "Small", Reason = "Cầu 1-1 (L-N-L-N-L-N)", Occurrences = 3 };
             if (sig == "BBSSBS") return new { Pred = "Small", Reason = "Cầu 2-2-1", Occurrences = 1 };
             if (sig == "SSBBBS") return new { Pred = "Big", Reason = "Cầu 2-2-1", Occurrences = 1 };
             
