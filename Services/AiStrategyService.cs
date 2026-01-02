@@ -14,6 +14,7 @@ namespace DropAI.Services
         public int Occurrences { get; set; }
         public string Reason { get; set; } = ""; // Human-readable reasoning
         public List<string> ProjectedPath { get; set; } = new List<string>(); // Next 5 steps (Format: "Pred (Conf%)")
+        public string RawSignalText { get; set; } = ""; // Original signal text from external bot (e.g., "🪀 Vào Lệnh - NHỎ 🪐")
     }
 
     public class AiStrategyService

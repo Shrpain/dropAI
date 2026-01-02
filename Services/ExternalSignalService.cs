@@ -13,6 +13,7 @@ namespace DropAI.Services
         private Channel? _targetChannel;
         private string? _latestPrediction;
         private string? _latestIssue;
+        private string? _latestRawSignal; // Store raw signal text like "🪀 Vào Lệnh - NHỎ 🪐"
         private DateTime _lastUpdateTime;
 
         public ExternalSignalService(ILogger<ExternalSignalService> logger)
@@ -179,12 +180,17 @@ namespace DropAI.Services
 
                 string prediction = predictionMatch.Groups[1].Value.ToUpper() == "LỚN" ? "Big" : "Small";
 
+                // Extract raw signal line (e.g., "🪀 Vào Lệnh - NHỎ 🪐")
+                var rawLineMatch = Regex.Match(messageText, @"🪀 Vào Lệnh - (LỚN|NHỎ) 🪐", RegexOptions.IgnoreCase);
+                string rawSignal = rawLineMatch.Success ? rawLineMatch.Value : "";
+
                 // Update latest signal
                 _latestIssue = last5Digits;
                 _latestPrediction = prediction;
+                _latestRawSignal = rawSignal;
                 _lastUpdateTime = DateTime.Now;
 
-                _logger.LogInformation($"✅ Parsed Signal - Issue: {last5Digits}, Prediction: {prediction}");
+                _logger.LogInformation($"✅ Parsed Signal - Issue: {last5Digits}, Prediction: {prediction}, Raw: {rawSignal}");
             }
             catch (Exception ex)
             {
@@ -212,7 +218,8 @@ namespace DropAI.Services
                         Confidence = 95, // External signal treated as high confidence
                         BestStrat = "ExternalSignal",
                         Reason = "Tín hiệu từ kênh @tinhieu168",
-                        Occurrences = 1
+                        Occurrences = 1,
+                        RawSignalText = _latestRawSignal ?? "" // Include raw signal text
                     };
                 }
                 else

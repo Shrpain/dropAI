@@ -271,13 +271,12 @@ namespace DropAI.TelegramBot
         {
             if (_activeChats.IsEmpty) return;
 
-            // Simplified message format
+            // Simplified message format - show raw signal if available
             string status = aiResult == "Thắng" ? "✅" : "❌";
             
             var msg = $"💰 *Tiền:* {balance}\n" +
                       $"📅 *Phiên:* {issue}\n" +
                       $"🔢 *Số:* {number} ({size})\n" +
-                      $"💵 *Cược:* {aiGuess} {status}\n" +
                       $"{betAmount}";
 
             // 2. Format History Table (Last 10)

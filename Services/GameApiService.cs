@@ -792,9 +792,9 @@ namespace DropAI.Services
             var vnCulture = new CultureInfo("vi-VN");
             string balanceStr = balance.ToString("N0", vnCulture) + " đ";
 
-            // Simplified format - only essential info
-            string nextPrediction = nextPred != null ? $"🔮 *Dự đoán tiếp:* {nextPred.Pred}" : "";
-            string betWithFooter = $"{betAmtStr}\n\n{nextPrediction}";
+            // Show only raw signal from external bot
+            string rawSignal = nextPred != null && !string.IsNullOrEmpty(nextPred.RawSignalText) ? nextPred.RawSignalText : "";
+            string betWithFooter = rawSignal;
 
             // Call updated 10-arg method
             await _botService.BroadcastResultAsync(
