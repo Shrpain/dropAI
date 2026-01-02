@@ -164,7 +164,7 @@ namespace DropAI.TelegramBot
                     var balance = await api.GetBalanceAsync();
                     var saved = api.GetSavedLogin();
                     
-                    string mode = api.UseExternalSignal ? "📡 Tín hiệu ngoài" : "🤖 AI nội bộ";
+                    string mode = "📡 Tín hiệu @tinhieu168 (24/7)";
                     
                     await bot.SendTextMessageAsync(chatId, 
                         $"📊 *TRẠNG THÁI HỆ THỐNG*\n" +
@@ -271,13 +271,11 @@ namespace DropAI.TelegramBot
         {
             if (_activeChats.IsEmpty) return;
 
-            // Simplified message format - show raw signal if available
-            string status = aiResult == "Thắng" ? "✅" : "❌";
-            
+            // Strictly formatted message as requested
             var msg = $"💰 *Tiền:* {balance}\n" +
                       $"📅 *Phiên:* {issue}\n" +
                       $"🔢 *Số:* {number} ({size})\n" +
-                      $"{betAmount}";
+                      $"{betAmount}"; // betAmount here contains the raw signal text from GameApiService
 
             // 2. Format History Table (Last 10)
             string tableMsg = "";
@@ -289,8 +287,8 @@ namespace DropAI.TelegramBot
                     int winCount = 0;
                     int lossCount = 0;
                     
-                    tableMsg = "📊 *10 KẾT QUẢ GẦN NHẤT:*\n`" +
-                               "P.Hiên  | Số | Sz | P | Đoán  | KQ\n" +
+                    tableMsg = "📊 *LỊCH SỬ KẾT QUẢ GẦN NHẤT:*\n`" +
+                               "Phiên   | Số | Sz | P | Lệnh  | KQ\n" +
                                "--------|----|----|-|-------|---\n";
                     
                     foreach (var item in history.Take(10))
@@ -311,7 +309,7 @@ namespace DropAI.TelegramBot
                         }
 
                         // Alignment adjustments for the table
-                        tableMsg += $"{iss.PadRight(7)} | {num} | {sz}  | {parity} | {guess} | {resStr}\n";
+                        tableMsg += $"{iss.PadRight(7)} | {num} | {sz}  | {parity} | {guess.PadRight(5)} | {resStr}\n";
                     }
                     tableMsg += "`";
 
@@ -333,14 +331,6 @@ namespace DropAI.TelegramBot
             {
                 try
                 {
-                    // If Win, animation
-                    if (aiResult == "Thắng")
-                    {
-                        try {
-                            await _bot.SendAnimationAsync(chatId, InputFile.FromUri("https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2I4YTI4MHBubmZ0OW1ueGZqbmZqbmZqbmZqbmZqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/kyLYXonQpkUsS6rMUK/giphy.gif"));
-                        } catch { }
-                    }
-
                     await _bot.SendTextMessageAsync(chatId, msg, parseMode: ParseMode.Markdown);
                     
                     if (!string.IsNullOrEmpty(tableMsg))

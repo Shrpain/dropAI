@@ -29,7 +29,7 @@ namespace DropAI.Services
         public string Status { get; private set; } = "Ready (API Mode)";
 
         // AUTO-BET STATE
-        public bool IsAutoBetEnabled { get; set; } = false;
+        public bool IsAutoBetEnabled { get; set; } = true;
         public decimal BaseAmount { get; set; } = 1000;
         public List<int> MartingaleConfig { get; set; } = new List<int> { 2, 4, 8, 19, 40, 90 };
         public int MartingaleStep { get; set; } = 0;
@@ -56,6 +56,32 @@ namespace DropAI.Services
             _externalSignalService = externalSignalService;
             _httpClient = new HttpClient();
             ConfigureHttpClient();
+
+            // Auto-login on PC if session exists
+            _ = Task.Run(async () =>
+            {
+                try {
+                    await Task.Delay(3000); // Wait for everything to settle
+                    var saved = GetSavedLogin();
+                    if (saved != null)
+                    {
+                        Console.WriteLine($"[GameAPI] Found saved login for {saved.User}. Attempting auto-login...");
+                        if (await LoginAsync(saved.User, saved.Pass))
+                        {
+                            Console.WriteLine("[GameAPI] Auto-login SUCCESS. Starting polling...");
+                            StartPolling();
+                        }
+                        else {
+                            Console.WriteLine("[GameAPI] Auto-login FAILED.");
+                        }
+                    }
+                    else {
+                        Console.WriteLine("[GameAPI] No saved login found in login.json");
+                    }
+                } catch (Exception ex) {
+                    Console.WriteLine($"[GameAPI] Auto-login CRASHED: {ex.Message}");
+                }
+            });
         }
 
         private void ConfigureHttpClient()
@@ -149,41 +175,78 @@ namespace DropAI.Services
                             // This prevents duplicate messages and redundant AI/Betting logic
                             if (_lastProcessedResultIssue != latest.IssueNumber)
                             {
+                                 Console.WriteLine($"[DEBUG] New Result Found! Current: {latest.IssueNumber}, Previous: {_lastProcessedResultIssue}");
                                  _lastProcessedResultIssue = latest.IssueNumber;
 
                                 // 1. Run AI or get External Signal
                                 string nextIssue = (long.Parse(latest.IssueNumber) + 1).ToString();
                                 
-                                if (UseExternalSignal)
-                                {
-                                    _currentPrediction = _externalSignalService.GetLatestSignal(nextIssue);
-                                    if (_currentPrediction == null)
-                                    {
-                                        Console.WriteLine($"⚠️ External signal not available for issue {nextIssue}, falling back to AI");
-                                        _currentPrediction = AiStrategyService.EnsemblePredict(history);
-                                    }
-                                }
-                                else
-                                {
-                                    _currentPrediction = AiStrategyService.EnsemblePredict(history);
-                                }
-                                
-                                // STORE PREDICTION FOR HISTORY MAPPING
-                                _aiPredictions[nextIssue] = _currentPrediction ?? new AiPrediction { Pred = "-" };
+                                 if (UseExternalSignal)
+                                 {
+                                     // STICKY WAIT: Try to get external signal for up to 24 seconds (WinGo 30s lock is at 25s)
+                                     _currentPrediction = null;
+                                     for (int i = 0; i < 24; i++)
+                                     {
+                                         _currentPrediction = _externalSignalService.GetLatestSignal(nextIssue);
+                                         if (_currentPrediction != null) break;
+                                         
+                                         if (i == 0) Console.WriteLine($"⏳ [{DateTime.Now:HH:mm:ss}] Đang đợi tín hiệu cho kỳ {nextIssue} từ @tinhieu168 (tối đa 24s)...");
+                                         await Task.Delay(1000, ct); 
+                                     }
 
-                                // 2. Evaluate AutoBet
-                                await EvaluateAutoBetInternal(history);
-                                
-                                // 3. Broadcast Result
-                                string betAmtStr = "0 đ";
-                                if (_lastFinishedBetIssue == latest.IssueNumber)
-                                {
-                                    betAmtStr = _lastFinishedBetAmount.ToString("N0") + " đ";
-                                }
-                                
-                                await NotifyBot(_lastBalance, latest, _currentPrediction, betAmtStr, history);
-                            }
-                        }
+                                     if (_currentPrediction == null)
+                                     {
+                                         Console.WriteLine($"❌ Không nhận được tín hiệu từ bot cho kỳ {nextIssue}. Bỏ qua cược.");
+                                     }
+                                 }
+                                 else
+                                 {
+                                     // Even if AI mode is set, we use external logic if possible, or skip
+                                     _currentPrediction = _externalSignalService.GetLatestSignal(nextIssue);
+                                 }
+
+                                 // STORE PREDICTION FOR HISTORY MAPPING
+                                 _aiPredictions[nextIssue] = _currentPrediction ?? new AiPrediction { Pred = "-" };
+
+                                 // 2. Evaluate AutoBet
+                                 await EvaluateAutoBetInternal(history);
+
+                                 // 3. Broadcast Result
+                                 string historyJson = System.Text.Json.JsonSerializer.Serialize(history.Take(10).Select(item => {
+                                     var pred = _aiPredictions.ContainsKey(item.IssueNumber) ? _aiPredictions[item.IssueNumber] : _externalSignalService.GetSignal(item.IssueNumber);
+                                     return new
+                                     {
+                                         issue = item.IssueNumber,
+                                         number = item.Number.ToString(),
+                                         size = item.Size,
+                                         parity = item.Parity,
+                                         aiGuess = pred?.Pred ?? "-",
+                                         aiResult = (pred != null && !string.IsNullOrEmpty(pred.Pred) && item.Size != "-") ? (pred.Pred == item.Size ? "✅" : "❌") : "-"
+                                     };
+                                 }));
+
+                                 // For the main message:
+                                 // We show the signal for the round that just finished (latest) 
+                                 // AND the signal for the upcoming round (currentPred)
+                                 string betWithFooter = "";
+                                 
+                                 if (_currentPrediction != null && !string.IsNullOrEmpty(_currentPrediction.RawSignalText))
+                                 {
+                                     betWithFooter += $"{_currentPrediction.RawSignalText}";
+                                     
+                                     // ADDED: Show actual bet amount for the upcoming round
+                                     if (IsAutoBetEnabled && _lastBetIssue == nextIssue && _lastBetAmount > 0)
+                                     {
+                                         betWithFooter += $"\n😍 *Số tiền:* {_lastBetAmount.ToString("N0")} đ";
+                                     }
+                                 }
+                                 else {
+                                     betWithFooter += "⏳ Đang đợi tín hiệu tiếp theo...";
+                                 }
+
+                                 await NotifyBot(_lastBalance, latest, betWithFooter, historyJson);
+                             }
+                         }
                     }
                 }
                 catch (Exception ex)
@@ -598,7 +661,7 @@ namespace DropAI.Services
             }
             
             var jsonString = "{" + string.Join(",", entries) + "}";
-            Console.WriteLine($"[GameAPI] Signing String: {jsonString}");
+            // Console.WriteLine($"[GameAPI] Signing String: {jsonString}");
             
             return CreateMD5(jsonString);
         }
@@ -734,93 +797,30 @@ namespace DropAI.Services
             }
         }
 
-        private async Task NotifyBot(decimal balance, GameHistoryItem latest, AiPrediction? nextPred, string betAmtStr, List<GameHistoryItem> history)
+        private async Task NotifyBot(decimal balance, GameHistoryItem latest, string betWithFooter, string historyJson)
         {
-            // FIX: Retrieve the prediction specifically for *this* finished issue to show in the header
-            string headerPred = "?";
-            string headerReason = "";
-            int headerOccur = 0;
-            string rawStatus = "Mất kết nối";
-            
-            if (_aiPredictions.TryGetValue(latest.IssueNumber, out var historicalPred))
+            try
             {
-                headerPred = historicalPred.Pred;
-                headerReason = historicalPred.Reason;
-                headerOccur = historicalPred.Occurrences;
-
-                if (latest.Size != "-")
+                if (_botService != null)
                 {
-                    rawStatus = headerPred == latest.Size ? "Thắng" : "Thua";
+                    string balanceStr = balance.ToString("N0") + " đ";
+
+                    Console.WriteLine("------------------------------------------");
+                    Console.WriteLine($"🚀 BROADCASTING RESULT TO TELEGRAM");
+                    Console.WriteLine($"💰 Tiền: {balanceStr}");
+                    Console.WriteLine($"📅 Phiên: {latest.IssueNumber}");
+                    Console.WriteLine($"🔢 Số: {latest.Number} ({latest.Size})");
+                    Console.WriteLine($"✨ Tín hiệu: \n{betWithFooter}");
+                    Console.WriteLine("------------------------------------------");
+
+                    // Call updated Broadcast (aiGuess and aiResult are redundant now as they are in betWithFooter or table)
+                    await _botService.BroadcastResultAsync(balanceStr, latest.IssueNumber, latest.Number.ToString(), latest.Size, "", "", betWithFooter, historyJson);
                 }
             }
-            else if (nextPred != null)
+            catch (Exception ex)
             {
-                 headerPred = "(N/A)"; 
+                Console.WriteLine($"[GameAPI] NotifyBot Error: {ex.Message}");
             }
-
-            // Serialize History with keys matching HistoryItem class in TelegramBotService
-            var historySummary = JsonSerializer.Serialize(history.Take(10).Select((h, i) => {
-                var aiPObj = _aiPredictions.ContainsKey(h.IssueNumber) ? _aiPredictions[h.IssueNumber] : null;
-                
-                // BACKFILL: If no stored prediction, try to calculate one for display (only for older items)
-                if (aiPObj == null && i < history.Count - 1)
-                {
-                    // Create a sub-history starting from this item to predict it
-                    var subHistory = history.Skip(i).ToList();
-                    aiPObj = AiStrategyService.EnsemblePredict(subHistory);
-                }
-
-                string aiP = aiPObj?.Pred ?? "-";
-                // Determine result for THIS history item
-                string rStr = "-";
-                if (aiP != "-" && h.Size != "-")
-                {
-                    rStr = aiP == h.Size ? "Thắng" : "Thua";
-                }
-                
-                return new 
-                {
-                    issue = h.IssueNumber.Substring(h.IssueNumber.Length - 5), // Show last 5 digits for cleaner table
-                    number = h.Number.ToString(),
-                    size = h.Size,
-                    parity = h.Parity,
-                    aiGuess = aiP,
-                    aiResult = rStr == "Thắng" ? "✅" : (rStr == "Thua" ? "❌" : "-")
-                };
-            }));
-
-            var vnCulture = new CultureInfo("vi-VN");
-            string balanceStr = balance.ToString("N0", vnCulture) + " đ";
-
-            // Show only raw signal from external bot
-            string rawSignal = nextPred != null && !string.IsNullOrEmpty(nextPred.RawSignalText) ? nextPred.RawSignalText : "";
-            string betWithFooter = rawSignal;
-
-            // Call updated 10-arg method
-            await _botService.BroadcastResultAsync(
-                balanceStr,
-                latest.IssueNumber,
-                latest.Number.ToString(),
-                latest.Size,
-                headerPred,
-                rawStatus,
-                betWithFooter,
-                historySummary,
-                0,  // No occurrences
-                ""  // No reason
-            );
-            
-            // Send to Hub (Legacy - optional but keeping for consistency)
-             await _hubContext.Clients.All.SendAsync("NotifyBotResult",
-                balanceStr,
-                latest.IssueNumber,
-                latest.Number.ToString(),
-                latest.Size,
-                headerPred,
-                rawStatus == "Thắng" ? "✅ Thắng" : "❌ Thua",
-                betAmtStr,
-                historySummary
-            );
         }
 
 

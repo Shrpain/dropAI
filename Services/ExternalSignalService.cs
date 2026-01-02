@@ -11,10 +11,10 @@ namespace DropAI.Services
         private readonly Client _client;
         private readonly ILogger<ExternalSignalService> _logger;
         private Channel? _targetChannel;
-        private string? _latestPrediction;
-        private string? _latestIssue;
-        private string? _latestRawSignal; // Store raw signal text like "🪀 Vào Lệnh - NHỎ 🪐"
         private DateTime _lastUpdateTime;
+        private int _lastProcessedId = 0;
+        private string _lastProcessedText = "";
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, AiPrediction> _signalCache = new();
 
         public ExternalSignalService(ILogger<ExternalSignalService> logger)
         {
@@ -133,10 +133,21 @@ namespace DropAI.Services
             {
                 try
                 {
-                    var messages = await GetLatestMessagesAsync(5);
-                    foreach (var msg in messages)
+                    var messages = await GetLatestMessagesAsync(20); // Check more messages (20)
+                    foreach (var msg in messages.AsEnumerable().Reverse()) // Chronological order: oldest to newest
                     {
-                        await ProcessMessage(msg.message);
+                        // Process if it's a new ID OR if the text in the same ID has changed (handling edits)
+                        if (msg.id < _lastProcessedId) continue; 
+                        
+                        if (msg.message != null)
+                        {
+                            if (msg.id == _lastProcessedId && msg.message == _lastProcessedText) continue;
+
+                            await ProcessMessage(msg.message);
+                            _lastProcessedText = msg.message;
+                        }
+                        
+                        _lastProcessedId = msg.id;
                     }
                 }
                 catch (Exception ex)
@@ -144,7 +155,7 @@ namespace DropAI.Services
                     _logger.LogError(ex, "Lỗi trong polling loop");
                 }
 
-                await Task.Delay(2000); // Poll every 2 seconds
+                await Task.Delay(1000); // Poll every 1 second
             }
         }
 
@@ -159,8 +170,15 @@ namespace DropAI.Services
                 // Kỳ xổ: (100052437)
                 // 🪀 Vào Lệnh - NHỎ 🪐
 
-                // Extract Issue Number (last 5 digits)
-                var issueMatch = Regex.Match(messageText, @"Kỳ xổ: \((\d+)\)");
+                // Extract Issue Number (looking for long digits, optionally in parentheses)
+                // Format could be: Kỳ xổ: (100052437) [9 digits] or 20260102100052437 [17 digits]
+                var issueMatch = Regex.Match(messageText, @"(?:Kỳ xổ:\s*)?\(?(\d{8,})\)?");
+                if (!issueMatch.Success)
+                {
+                    // Fallback: search for any sequence of 8+ digits
+                    issueMatch = Regex.Match(messageText, @"(\d{8,})"); 
+                }
+
                 if (!issueMatch.Success)
                 {
                     _logger.LogWarning("⚠️ Không tìm thấy số kỳ xổ trong tin nhắn");
@@ -180,17 +198,35 @@ namespace DropAI.Services
 
                 string prediction = predictionMatch.Groups[1].Value.ToUpper() == "LỚN" ? "Big" : "Small";
 
-                // Extract raw signal line (e.g., "🪀 Vào Lệnh - NHỎ 🪐")
-                var rawLineMatch = Regex.Match(messageText, @"🪀 Vào Lệnh - (LỚN|NHỎ) 🪐", RegexOptions.IgnoreCase);
-                string rawSignal = rawLineMatch.Success ? rawLineMatch.Value : "";
+                // Extract raw signal line (looking for "Vào Lệnh - LỚN/NHỎ")
+                // We'll try to find the line that contains the prediction words
+                string rawSignal = "";
+                var lines = messageText.Split('\n');
+                foreach (var line in lines)
+                {
+                    if (line.Contains("Vào Lệnh", StringComparison.OrdinalIgnoreCase) && 
+                       (line.Contains("LỚN", StringComparison.OrdinalIgnoreCase) || line.Contains("NHỎ", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        rawSignal = line.Trim();
+                        break;
+                    }
+                }
 
-                // Update latest signal
-                _latestIssue = last5Digits;
-                _latestPrediction = prediction;
-                _latestRawSignal = rawSignal;
+                // Update Cache
+                var predictionObj = new AiPrediction
+                {
+                    Pred = prediction,
+                    Confidence = 95,
+                    BestStrat = "ExternalSignal",
+                    Reason = "Tín hiệu từ kênh @tinhieu168",
+                    Occurrences = 1,
+                    RawSignalText = rawSignal
+                };
+
+                _signalCache[last5Digits] = predictionObj;
                 _lastUpdateTime = DateTime.Now;
 
-                _logger.LogInformation($"✅ Parsed Signal - Issue: {last5Digits}, Prediction: {prediction}, Raw: {rawSignal}");
+                _logger.LogInformation($"✅ Saved Signal to Cache - Issue: {last5Digits}, Prediction: {prediction}, Raw: {rawSignal}");
             }
             catch (Exception ex)
             {
@@ -200,38 +236,26 @@ namespace DropAI.Services
             await Task.CompletedTask;
         }
 
+        public AiPrediction? GetSignal(string targetIssue)
+        {
+            string targetLast5 = targetIssue.Length >= 5 ? targetIssue.Substring(targetIssue.Length - 5) : targetIssue;
+            return _signalCache.TryGetValue(targetLast5, out var signal) ? signal : null;
+        }
+
         public AiPrediction? GetLatestSignal(string targetIssue)
         {
             // Match last 5 digits
             string targetLast5 = targetIssue.Length >= 5 ? targetIssue.Substring(targetIssue.Length - 5) : targetIssue;
 
-            if (_latestIssue == targetLast5 && !string.IsNullOrEmpty(_latestPrediction))
+            if (_signalCache.TryGetValue(targetLast5, out var signal))
             {
-                // Signal is fresh (within last 60 seconds)
-                if ((DateTime.Now - _lastUpdateTime).TotalSeconds < 60)
-                {
-                    _logger.LogInformation($"🎯 Sử dụng tín hiệu ngoài cho issue {targetIssue}: {_latestPrediction}");
-                    
-                    return new AiPrediction
-                    {
-                        Pred = _latestPrediction,
-                        Confidence = 95, // External signal treated as high confidence
-                        BestStrat = "ExternalSignal",
-                        Reason = "Tín hiệu từ kênh @tinhieu168",
-                        Occurrences = 1,
-                        RawSignalText = _latestRawSignal ?? "" // Include raw signal text
-                    };
-                }
-                else
-                {
-                    _logger.LogWarning($"⚠️ Tín hiệu đã cũ ({(DateTime.Now - _lastUpdateTime).TotalSeconds}s). Bỏ qua.");
-                }
-            }
-            else
-            {
-                _logger.LogWarning($"⚠️ Không tìm thấy tín hiệu cho issue {targetIssue}. Latest: {_latestIssue}");
+                _logger.LogInformation($"🎯 Found cached signal for issue {targetIssue}: {signal.Pred}");
+                return signal;
             }
 
+            // Also try to find a signal that might have a slightly different issue format if possible
+            // But usually 5 digits is stable
+            
             return null;
         }
 

@@ -32,7 +32,11 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
-
+ 
+// Pre-initialize services to trigger constructors/auto-logins
+_ = app.Services.GetRequiredService<DropAI.Services.ExternalSignalService>();
+_ = app.Services.GetRequiredService<DropAI.Services.GameApiService>();
+ 
 app.UseRouting();
 
 app.UseAuthorization();
