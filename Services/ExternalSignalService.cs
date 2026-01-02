@@ -22,6 +22,19 @@ namespace DropAI.Services
             // Configure WTelegram
             _client = new Client(Config);
             _lastUpdateTime = DateTime.MinValue;
+            
+            // Auto-initialize with phone number
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await InitializeAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Không thể khởi tạo ExternalSignalService tự động.");
+                }
+            });
         }
 
         private string? Config(string what)
@@ -30,14 +43,16 @@ namespace DropAI.Services
             {
                 case "api_id": return "29084135";
                 case "api_hash": return "fc82abcc4e1577d0a5552fba651e7593";
-                case "phone_number": return null; // Sẽ được yêu cầu khi login
-                case "verification_code": return null; // Sẽ được yêu cầu
+                case "phone_number": return "+84369533653"; // User's Telegram phone
+                case "verification_code": 
+                    Console.Write("Enter verification code: ");
+                    return Console.ReadLine();
                 case "session_pathname": return "telegram_session.dat";
                 default: return null;
             }
         }
 
-        public async Task InitializeAsync(string phoneNumber, string? verificationCode = null)
+        public async Task InitializeAsync()
         {
             try
             {
@@ -49,6 +64,9 @@ namespace DropAI.Services
 
                 // Join channel @tinhieu168
                 await SubscribeToChannel("tinhieu168");
+                
+                // Start polling channel messages
+                _ = Task.Run(PollChannelAsync);
                 
                 _logger.LogInformation("ExternalSignalService khởi tạo thành công!");
             }
@@ -140,7 +158,7 @@ namespace DropAI.Services
                 // Kỳ xổ: (100052437)
                 // 🪀 Vào Lệnh - NHỎ 🪐
 
-                // Extract Issue Number (last 4 digits)
+                // Extract Issue Number (last 5 digits)
                 var issueMatch = Regex.Match(messageText, @"Kỳ xổ: \((\d+)\)");
                 if (!issueMatch.Success)
                 {
@@ -149,7 +167,7 @@ namespace DropAI.Services
                 }
 
                 string fullIssue = issueMatch.Groups[1].Value;
-                string last4Digits = fullIssue.Length >= 4 ? fullIssue.Substring(fullIssue.Length - 4) : fullIssue;
+                string last5Digits = fullIssue.Length >= 5 ? fullIssue.Substring(fullIssue.Length - 5) : fullIssue;
 
                 // Extract Prediction (LỚN/NHỎ)
                 var predictionMatch = Regex.Match(messageText, @"Vào Lệnh\s*-\s*(LỚN|NHỎ)", RegexOptions.IgnoreCase);
@@ -162,11 +180,11 @@ namespace DropAI.Services
                 string prediction = predictionMatch.Groups[1].Value.ToUpper() == "LỚN" ? "Big" : "Small";
 
                 // Update latest signal
-                _latestIssue = last4Digits;
+                _latestIssue = last5Digits;
                 _latestPrediction = prediction;
                 _lastUpdateTime = DateTime.Now;
 
-                _logger.LogInformation($"✅ Parsed Signal - Issue: {last4Digits}, Prediction: {prediction}");
+                _logger.LogInformation($"✅ Parsed Signal - Issue: {last5Digits}, Prediction: {prediction}");
             }
             catch (Exception ex)
             {
@@ -178,10 +196,10 @@ namespace DropAI.Services
 
         public AiPrediction? GetLatestSignal(string targetIssue)
         {
-            // Match last 4 digits
-            string targetLast4 = targetIssue.Length >= 4 ? targetIssue.Substring(targetIssue.Length - 4) : targetIssue;
+            // Match last 5 digits
+            string targetLast5 = targetIssue.Length >= 5 ? targetIssue.Substring(targetIssue.Length - 5) : targetIssue;
 
-            if (_latestIssue == targetLast4 && !string.IsNullOrEmpty(_latestPrediction))
+            if (_latestIssue == targetLast5 && !string.IsNullOrEmpty(_latestPrediction))
             {
                 // Signal is fresh (within last 60 seconds)
                 if ((DateTime.Now - _lastUpdateTime).TotalSeconds < 60)
