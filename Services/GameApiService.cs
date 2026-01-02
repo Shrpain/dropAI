@@ -47,7 +47,7 @@ namespace DropAI.Services
 
         // EXTERNAL SIGNAL MODE
         private readonly ExternalSignalService _externalSignalService;
-        public bool UseExternalSignal { get; set; } = false;
+        public bool UseExternalSignal { get; set; } = true; // Default to external signal
 
         public GameApiService(Microsoft.AspNetCore.SignalR.IHubContext<DropAI.Hubs.BrowserHub> hubContext, DropAI.TelegramBot.TelegramBotService botService, ExternalSignalService externalSignalService)
         {
@@ -792,19 +792,9 @@ namespace DropAI.Services
             var vnCulture = new CultureInfo("vi-VN");
             string balanceStr = balance.ToString("N0", vnCulture) + " đ";
 
-            // Hack: Append footer prediction to betAmount string so it appears in the message
-            string footerReason = nextPred != null && !string.IsNullOrEmpty(nextPred.Reason) ? $"\n💡 *Lý do:* {nextPred.Reason}" : "";
-            
-            string pathStr = "";
-            if (nextPred != null && nextPred.ProjectedPath != null && nextPred.ProjectedPath.Count > 0)
-            {
-                // High-end visualization: L(80%) -> N(65%)...
-                var pathDisplay = nextPred.ProjectedPath.Select(p => p.Replace("Big", "L").Replace("Small", "N"));
-                pathStr = $"\n🔭 *Mô phỏng 5 ván sau:* {string.Join("-", pathDisplay)}";
-            }
-
-            string footerPrediction = nextPred != null ? $"🔮 *Dự đoán tiếp:* {nextPred.Pred} ({nextPred.Confidence}%){footerReason}{pathStr}" : "";
-            string betWithFooter = $"{betAmtStr}\n\n{footerPrediction}";
+            // Simplified format - only essential info
+            string nextPrediction = nextPred != null ? $"🔮 *Dự đoán tiếp:* {nextPred.Pred}" : "";
+            string betWithFooter = $"{betAmtStr}\n\n{nextPrediction}";
 
             // Call updated 10-arg method
             await _botService.BroadcastResultAsync(
@@ -816,8 +806,8 @@ namespace DropAI.Services
                 rawStatus,
                 betWithFooter,
                 historySummary,
-                headerOccur,
-                headerReason
+                0,  // No occurrences
+                ""  // No reason
             );
             
             // Send to Hub (Legacy - optional but keeping for consistency)

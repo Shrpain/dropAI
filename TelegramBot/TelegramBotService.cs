@@ -271,16 +271,14 @@ namespace DropAI.TelegramBot
         {
             if (_activeChats.IsEmpty) return;
 
-            // 1. Current Result Message
-            string status = aiResult == "Thắng" ? "✅ Thắng" : "❌ Thua";
-            string patternInfo = occurrences > 0 ? $"\n📊 *Dấu hiệu:* {occurrences} lần" : "";
-            string reasonInfo = !string.IsNullOrEmpty(reason) ? $"\n💡 *Lý do:* {reason}" : "";
+            // Simplified message format
+            string status = aiResult == "Thắng" ? "✅" : "❌";
             
             var msg = $"💰 *Tiền:* {balance}\n" +
                       $"📅 *Phiên:* {issue}\n" +
                       $"🔢 *Số:* {number} ({size})\n" +
-                      $"🤖 *AI:* {aiGuess} | {status}{patternInfo}{reasonInfo}\n" +
-                      $"💵 *Cược:* {betAmount}";
+                      $"💵 *Cược:* {aiGuess} {status}\n" +
+                      $"{betAmount}";
 
             // 2. Format History Table (Last 10)
             string tableMsg = "";
@@ -293,7 +291,7 @@ namespace DropAI.TelegramBot
                     int lossCount = 0;
                     
                     tableMsg = "📊 *10 KẾT QUẢ GẦN NHẤT:*\n`" +
-                               "P.Hiên  | Số | Sz | P | AI    | KQ\n" +
+                               "P.Hiên  | Số | Sz | P | Đoán  | KQ\n" +
                                "--------|----|----|-|-------|---\n";
                     
                     foreach (var item in history.Take(10))
