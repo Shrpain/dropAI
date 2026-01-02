@@ -13,7 +13,7 @@ namespace DropAI.Services
         public string Details { get; set; } = "";
         public int Occurrences { get; set; }
         public string Reason { get; set; } = ""; // Human-readable reasoning
-        public List<string> ProjectedPath { get; set; } = new List<string>(); // Next 5 steps
+        public List<string> ProjectedPath { get; set; } = new List<string>(); // Next 5 steps (Format: "Pred (Conf%)")
     }
 
     public class AiStrategyService
@@ -180,18 +180,21 @@ namespace DropAI.Services
 
             for (int i = 0; i < steps; i++)
             {
-                // Call EnsemblePredict with projectPath = false to avoid recursion
+                // Call EnsemblePredict with projectPath = false to ensure simulation follows prediction
+                // and simulation DOES NOT affect prediction (no feedback loop).
                 var p = EnsemblePredict(tempHistory, -1, false);
                 if (p != null)
                 {
-                    path.Add(p.Pred);
-                    // Add a mock result to history for next step prediction
+                    // High-end format: Size (Confidence%)
+                    path.Add($"{p.Pred} ({p.Confidence}%)");
+                    
+                    // Mock result for next step
                     var mock = new GameHistoryItem
                     {
                         IssueNumber = (long.Parse(tempHistory[0].IssueNumber) + 1).ToString(),
                         Size = p.Pred,
-                        Number = p.Pred == "Big" ? 7 : 2, // Mock number
-                        Parity = (i % 2 == 0) ? "Single" : "Double" // Mock parity
+                        Number = p.Pred == "Big" ? 7 : 2, 
+                        Parity = (i % 2 == 0) ? "Single" : "Double"
                     };
                     tempHistory.Insert(0, mock);
                 }

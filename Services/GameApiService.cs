@@ -783,8 +783,9 @@ namespace DropAI.Services
             string pathStr = "";
             if (nextPred != null && nextPred.ProjectedPath != null && nextPred.ProjectedPath.Count > 0)
             {
-                var pathDisplay = nextPred.ProjectedPath.Select(p => p == "Big" ? "L" : (p == "Small" ? "N" : p));
-                pathStr = $"\n🔭 *Dự báo 5 ván tới:* {string.Join(" -> ", pathDisplay)}";
+                // High-end visualization: L(80%) -> N(65%)...
+                var pathDisplay = nextPred.ProjectedPath.Select(p => p.Replace("Big", "L").Replace("Small", "N"));
+                pathStr = $"\n🔭 *Mô phỏng 5 ván sau:* {string.Join("-", pathDisplay)}";
             }
 
             string footerPrediction = nextPred != null ? $"🔮 *Dự đoán tiếp:* {nextPred.Pred} ({nextPred.Confidence}%){footerReason}{pathStr}" : "";
