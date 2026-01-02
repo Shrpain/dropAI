@@ -312,17 +312,39 @@ namespace DropAI.Services
             string sig = "";
             for (int i = 1; i <= 6; i++) sig += history[index + i].Size[0].ToString();
 
-            // Pattern Definitions (The last 6 should match these to predict the 7th)
-            // L-L-N-N-L-L -> dự đoán N
-            // N-N-L-L-N-N -> dự đoán L
-            // L-N-L-N-L-N -> dự đoán L (theo tiếp 1-1)
+            // Pattern Definitions (Last 8-10 results for longer bridges)
+            string sig8 = "";
+            if (index < history.Count - 8) for (int i = 1; i <= 8; i++) sig8 += history[index + i].Size[0].ToString();
             
-            if (sig == "BBSSBB") return new { Pred = "Small", Reason = "Đối xứng L-L-N-N-L-L", Occurrences = 1 };
-            if (sig == "SSBBSS") return new { Pred = "Big", Reason = "Đối xứng N-N-L-L-N-N", Occurrences = 1 };
-            if (sig == "BSBSBS") return new { Pred = "Big", Reason = "Cầu 1-1 (N-L-N-L-N-L)", Occurrences = 3 };
-            if (sig == "SBSBSB") return new { Pred = "Small", Reason = "Cầu 1-1 (L-N-L-N-L-N)", Occurrences = 3 };
-            if (sig == "BBSSBS") return new { Pred = "Small", Reason = "Cầu 2-2-1", Occurrences = 1 };
-            if (sig == "SSBBBS") return new { Pred = "Big", Reason = "Cầu 2-2-1", Occurrences = 1 };
+            string sig10 = "";
+            if (index < history.Count - 10) for (int i = 1; i <= 10; i++) sig10 += history[index + i].Size[0].ToString();
+
+            // 3-3 Bridge (N-N-N-L-L-L or L-L-L-N-N-N)
+            if (sig.StartsWith("SSSBBB")) return new { Pred = "Big", Reason = "Theo cầu 3-3 (N-N-N-L-L-L)", Occurrences = 6 };
+            if (sig.StartsWith("BBBSSS")) return new { Pred = "Small", Reason = "Theo cầu 3-3 (L-L-L-N-N-N)", Occurrences = 6 };
+            if (sig.StartsWith("SSSB") || sig.StartsWith("SSSBB")) return new { Pred = "Big", Reason = "Theo cầu 3-3 (N-N-N-L...)", Occurrences = 3 };
+            if (sig.StartsWith("BBBS") || sig.StartsWith("BBBSS")) return new { Pred = "Small", Reason = "Theo cầu 3-3 (L-L-L-N...)", Occurrences = 3 };
+
+            // 2-2 Bridge
+            if (sig.StartsWith("SSBB")) return new { Pred = "Small", Reason = "Theo cầu 2-2 (N-N-L-L)", Occurrences = 4 };
+            if (sig.StartsWith("BBSS")) return new { Pred = "Big", Reason = "Theo cầu 2-2 (L-L-N-N)", Occurrences = 4 };
+            if (sig.StartsWith("SSB")) return new { Pred = "Big", Reason = "Theo cầu 2-2 (N-N-L...)", Occurrences = 2 };
+            if (sig.StartsWith("BBS")) return new { Pred = "Small", Reason = "Theo cầu 2-2 (L-L-N...)", Occurrences = 2 };
+
+            // 4-4 Bridge
+            if (!string.IsNullOrEmpty(sig8))
+            {
+                if (sig8 == "SSSSBBBB") return new { Pred = "Small", Reason = "Theo cầu 4-4 (N-N-N-N-L-L-L-L)", Occurrences = 8 };
+                if (sig8 == "BBBBSSSS") return new { Pred = "Big", Reason = "Theo cầu 4-4 (L-L-L-L-N-N-N-N)", Occurrences = 8 };
+            }
+
+            // 1-1 Bridge (ZigZag) - Higher priority here
+            if (sig == "BSBSBS") return new { Pred = "Big", Reason = "Bám cầu 1-1 (N-L-N-L-N-L)", Occurrences = 6 };
+            if (sig == "SBSBSB") return new { Pred = "Small", Reason = "Bám cầu 1-1 (L-N-L-N-L-N)", Occurrences = 6 };
+
+            // Symmetry patterns
+            if (sig == "BBSSBB") return new { Pred = "Small", Reason = "Đối xứng L-L-N-N-L-L", Occurrences = 6 };
+            if (sig == "SSBBSS") return new { Pred = "Big", Reason = "Đối xứng N-N-L-L-N-N", Occurrences = 6 };
             
             return null;
         }
