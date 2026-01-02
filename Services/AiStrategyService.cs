@@ -27,6 +27,7 @@ namespace DropAI.Services
                 { "ZigZag", PredictZigZag },
                 { "Frequency", PredictFrequency },
                 { "SmartBridge", PredictSmartBridge },
+                { "Symmetry", PredictSymmetry },
                 { "Mirror", PredictMirror },
                 { "Neural", PredictNeural },
                 { "Wave", PredictWave },
@@ -186,6 +187,7 @@ namespace DropAI.Services
                 "ZigZag" => "Phát hiện cầu 1-1 (ZigZag)",
                 "Frequency" => "Dựa trên tần suất xuất hiện (Frequency)",
                 "SmartBridge" => "Khớp mẫu hình cầu đối xứng (Bridge)",
+                "Symmetry" => "Cầu đối xứng đặc biệt",
                 "Mirror" => "Dự đoán theo quy luật đối gương (Mirror)",
                 "Neural" => "Phân tích chuỗi lịch sử sâu (Neural)",
                 "Wave" => "Dựa trên chu kỳ sóng (Wave)",
@@ -258,6 +260,29 @@ namespace DropAI.Services
             if (matches < 3) return null;
             if ((double)bigVote / matches > 0.7) return new { Pred = "Big", Reason = "Khớp cầu đối xứng (Bridge)", Occurrences = matches };
             if ((double)smallVote / matches > 0.7) return new { Pred = "Small", Reason = "Khớp cầu đối xứng (Bridge)", Occurrences = matches };
+            return null;
+        }
+
+        private static object? PredictSymmetry(List<GameHistoryItem> history, int index)
+        {
+            if (index >= history.Count - 6) return null;
+            
+            // Get last 6 results as a string of B/S
+            string sig = "";
+            for (int i = 1; i <= 6; i++) sig += history[index + i].Size[0].ToString();
+
+            // Pattern Definitions (The last 6 should match these to predict the 7th)
+            // L-L-N-N-L-L -> dự đoán N
+            // N-N-L-L-N-N -> dự đoán L
+            // L-N-L-N-L-N -> dự đoán L (theo tiếp 1-1)
+            
+            if (sig == "BBSSBB") return new { Pred = "Small", Reason = "Đối xứng L-L-N-N-L-L", Occurrences = 1 };
+            if (sig == "SSBBSS") return new { Pred = "Big", Reason = "Đối xứng N-N-L-L-N-N", Occurrences = 1 };
+            if (sig == "BBSBBS") return new { Pred = "Small", Reason = "Cầu 2-1 (L-L-N)", Occurrences = 2 };
+            if (sig == "SSBSSB") return new { Pred = "Big", Reason = "Cầu 2-1 (N-N-L)", Occurrences = 2 };
+            if (sig == "BBSSBS") return new { Pred = "Small", Reason = "Cầu 2-2-1", Occurrences = 1 };
+            if (sig == "SSBBBS") return new { Pred = "Big", Reason = "Cầu 2-2-1", Occurrences = 1 };
+            
             return null;
         }
 
