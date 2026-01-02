@@ -53,6 +53,7 @@ namespace DropAI.Services
         {
             _hubContext = hubContext;
             _botService = botService;
+            WTelegram.Helpers.Log = (l, s) => { }; // Completely silence WTelegram noise
             _externalSignalService = externalSignalService;
             _httpClient = new HttpClient();
             ConfigureHttpClient();
@@ -175,7 +176,7 @@ namespace DropAI.Services
                             // This prevents duplicate messages and redundant AI/Betting logic
                             if (_lastProcessedResultIssue != latest.IssueNumber)
                             {
-                                 Console.WriteLine($"[DEBUG] New Result Found! Current: {latest.IssueNumber}, Previous: {_lastProcessedResultIssue}");
+                                 // Console.WriteLine($"[DEBUG] New Result Found! Current: {latest.IssueNumber}, Previous: {_lastProcessedResultIssue}");
                                  _lastProcessedResultIssue = latest.IssueNumber;
 
                                 // 1. Run AI or get External Signal

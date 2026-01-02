@@ -21,6 +21,7 @@ namespace DropAI.Services
             _logger = logger;
             
             // Configure WTelegram
+            // WTelegram.Helpers.Log = (l, s) => { }; // Completely silence WTelegram noise
             _client = new Client(Config);
             _lastUpdateTime = DateTime.MinValue;
             
@@ -163,7 +164,7 @@ namespace DropAI.Services
         {
             try
             {
-                _logger.LogInformation($"📨 Nhận tin nhắn mới: {messageText}");
+                // _logger.LogInformation($"📨 Nhận tin nhắn mới: {messageText}");
 
                 // Parse message format:
                 // VN168 WINGO 30 GIÂY
@@ -226,7 +227,7 @@ namespace DropAI.Services
                 _signalCache[last5Digits] = predictionObj;
                 _lastUpdateTime = DateTime.Now;
 
-                _logger.LogInformation($"✅ Saved Signal to Cache - Issue: {last5Digits}, Prediction: {prediction}, Raw: {rawSignal}");
+                // _logger.LogInformation($"✅ Saved Signal to Cache - Issue: {last5Digits}, Prediction: {prediction}, Raw: {rawSignal}");
             }
             catch (Exception ex)
             {
