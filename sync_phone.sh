@@ -1,13 +1,15 @@
 #!/bin/bash
 
-# 1. Setup paths and memory limits for ARM64/Termux
+# 1. Setup paths and memory limits for ARM64/Termux Stability
 export DOTNET_ROOT=$HOME/.dotnet
 export PATH=$PATH:$HOME/.dotnet
 export DOTNET_gcServer=0
-export DOTNET_GCHeapHardLimit=1C000000
-export DOTNET_TieredCompilation=0
+export DOTNET_GCHeapHardLimit=10000000
+export DOTNET_TieredCompilation=1
 export DOTNET_ReadyToRun=0
 export DOTNET_EnableWriteXorExecute=0
+export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+export COMPlus_EnableDiagnostics=0
 
 # 2. Pull latest code
 echo "🚀 Đang lấy code mới từ GitHub..."
