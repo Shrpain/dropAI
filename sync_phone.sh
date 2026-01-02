@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # 1. Setup stability paths and memory limits for ARM64/Termux
