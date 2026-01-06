@@ -72,3 +72,7 @@ appsettings.Development.json
 *.db
 *.db-shm
 *.db-wal
+
+login.json
+*.dat
+mobile_publish/

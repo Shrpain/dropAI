@@ -95,6 +95,16 @@ $(document).ready(function () {
         localStorage.setItem('dropAI_martingale', val);
     });
 
+    const $targetProfitInput = $('#targetProfitInput');
+    try {
+        const savedTarget = localStorage.getItem('dropAI_targetProfit');
+        if (savedTarget) $targetProfitInput.val(savedTarget);
+    } catch (e) { }
+
+    $targetProfitInput.on('change', function () {
+        localStorage.setItem('dropAI_targetProfit', $(this).val());
+    });
+
     // Toggle Handler
     $('#autoBetToggle').on('change', function () {
         evaluateAutoBet();
@@ -365,6 +375,13 @@ $(document).ready(function () {
     let winStreak = 0; // Infinite win streak counter
     let currentAiPrediction = null; // Store latest ensemble result for sync
     let currentAiPredictionMeta = null; // Store metadata like occurrences for sync
+
+    // Auto-Bet State Extended
+    let consecutiveLosses = 0;
+    let pauseUntil = null;
+    let isInRecoveryMode = false;
+    let startingBalance = 0;
+    let targetProfit = 0;
 
     const Strategies = {
         // Strategy 1: Streak Follower (Bệt)
@@ -767,16 +784,84 @@ $(document).ready(function () {
                 if (martingaleStep !== 0) console.log("[AutoBet] WIN detected on bet! Resetting Martingale.");
                 martingaleStep = 0;
                 winStreak++;
+                consecutiveLosses = 0;
             } else {
                 console.log("[AutoBet] LOSS detected on bet. Increasing Martingale.");
                 martingaleStep++;
+                consecutiveLosses++;
+
                 if (martingaleStep >= multipliers.length) {
                     martingaleStep = 0;
                     winStreak = 0;
                 }
+
+                if (consecutiveLosses >= 3) {
+                    console.log("[AutoBet] 3 consecutive losses! Pausing for 3 minutes.");
+                    pauseUntil = Date.now() + (3 * 60 * 1000);
+                    consecutiveLosses = 0;
+                    isInRecoveryMode = true;
+                    martingaleStep = 0; // Reset as requested
+
+                    // UI Alert
+                    showStatusBadge("Paused: 3 Losses", "warning");
+                }
             }
             // Clear used bet tracking to prevent double-processing same game
             lastBetIssue = "";
+        }
+
+        // 2.1 Target Profit Check
+        const rawBalance = $('#uiAmount').text().replace(/[^0-9]/g, '');
+        const currentBalance = parseInt(rawBalance) || 0;
+        targetProfit = parseInt($targetProfitInput.val()) || 0;
+
+        if (targetProfit > 0) {
+            if (startingBalance === 0) startingBalance = currentBalance;
+            const profit = currentBalance - startingBalance;
+
+            $('#profitStatus').show();
+            $('#currentProfitVal').text(profit.toLocaleString() + ' đ');
+            $('#targetProfitVal').text(targetProfit.toLocaleString() + ' đ');
+
+            if (profit >= targetProfit) {
+                console.log("[AutoBet] Target Profit Reached! Stopping.");
+                $toggle.prop('checked', false).trigger('change');
+                startingBalance = 0;
+                return;
+            }
+        } else {
+            $('#profitStatus').hide();
+        }
+
+        // 2.2 Pause & Recovery Check
+        if (pauseUntil) {
+            const now = Date.now();
+            if (now < pauseUntil) {
+                const remains = Math.ceil((pauseUntil - now) / 1000);
+                $('#autoBetStatus').text(`PAUSED (${remains}s)`).addClass('bg-warning text-dark');
+                return;
+            } else {
+                if (isInRecoveryMode) {
+                    // Check if the latest result (completedGame) was a win for our AI
+                    const historicalAI = completedGame.aiGuess;
+                    if (historicalAI && historicalAI !== '-') {
+                        const historicalWin = historicalAI === completedGame.size;
+                        if (historicalWin) {
+                            console.log("[AutoBet] Recovery win detected! Resuming.");
+                            isInRecoveryMode = false;
+                            pauseUntil = null;
+                            martingaleStep = 0;
+                        } else {
+                            $('#autoBetStatus').text("WAITING WIN").addClass('bg-warning text-dark');
+                            return;
+                        }
+                    } else {
+                        return; // Wait for one game with prediction
+                    }
+                } else {
+                    pauseUntil = null;
+                }
+            }
         }
 
         // 3. Use passed prediction OR late-bound global

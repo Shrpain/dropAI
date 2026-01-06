@@ -42,6 +42,14 @@ namespace DropAI.Services
         private string? _lastProcessedResultIssue; // To ensure we only bet once per new result
         private AiPrediction? _currentPrediction;
         private decimal _lastBalance = 0;
+        private decimal _startingBalance = 0;
+        public decimal ProfitTarget { get; set; } = 0;
+        private int _consecutiveLosses = 0;
+        private int _consecutiveSignalLosses = 0; // Global tracker for notifications
+        private DateTime? _pauseUntil = null;
+        private bool _isInRecoveryMode = false;
+        private string? _lastResultIssue = null;
+        private bool _isNotificationPausedSent = false;
 
         private System.Collections.Concurrent.ConcurrentDictionary<string, AiPrediction> _aiPredictions = new();
 
@@ -179,7 +187,10 @@ namespace DropAI.Services
                                  // Console.WriteLine($"[DEBUG] New Result Found! Current: {latest.IssueNumber}, Previous: {_lastProcessedResultIssue}");
                                  _lastProcessedResultIssue = latest.IssueNumber;
 
-                                // 1. Run AI or get External Signal
+                                 // GLOBAL TRACKER: Check if bot's prediction was correct regardless of auto-bet
+                                 TrackSignalPerformance(latest);
+
+                                 // 1. Run AI or get External Signal
                                 string nextIssue = (long.Parse(latest.IssueNumber) + 1).ToString();
                                 
                                  if (UseExternalSignal)
@@ -684,17 +695,91 @@ namespace DropAI.Services
                 {
                     MartingaleStep = 0;
                     WinStreak++;
+                    _consecutiveLosses = 0;
                 }
                 else
                 {
                     MartingaleStep++;
+                    _consecutiveLosses++;
+                    
                     if (MartingaleStep >= MartingaleConfig.Count)
                     {
                         MartingaleStep = 0;
                         WinStreak = 0;
                     }
+
+                    if (_consecutiveLosses >= 3)
+                    {
+                        // Logic moved to TrackSignalPerformance for global consistency
+                        // We still reset its own counter here for Martingale safety
+                        _consecutiveLosses = 0;
+                    }
                 }
                 _lastBetIssue = null; // Clear
+            }
+
+            // Target Profit Check
+            if (ProfitTarget > 0)
+            {
+                if (_startingBalance == 0) _startingBalance = _lastBalance;
+                decimal currentProfit = _lastBalance - _startingBalance;
+                if (currentProfit >= ProfitTarget)
+                {
+                    Console.WriteLine($"[AutoBet] Profit Target reached ({currentProfit:N0} >= {ProfitTarget:N0}). Stopping.");
+                    IsAutoBetEnabled = false;
+                    _startingBalance = 0; // Reset for next start
+                    return;
+                }
+            }
+
+            // Pause Check
+            if (_pauseUntil.HasValue)
+            {
+                if (DateTime.Now < _pauseUntil.Value)
+                {
+                    if (!_isNotificationPausedSent)
+                    {
+                         // Heartbeat for pause? No, too noisy.
+                    }
+                    return;
+                }
+                else
+                {
+                    // Pause over, check if we need to switch to recovery mode check
+                    if (_isInRecoveryMode)
+                    {
+                        // Check history[0] to see if it's a win for our AI
+                        string? historicalAiGuess = _aiPredictions.ContainsKey(latest.IssueNumber) ? _aiPredictions[latest.IssueNumber].Pred : null;
+                        if (historicalAiGuess != null)
+                        {
+                            bool historicalWin = historicalAiGuess == latest.Size;
+                            if (historicalWin)
+                            {
+                                Console.WriteLine($"[AutoBet] Recovery win detected on {latest.IssueNumber}. Resuming auto-bet.");
+                                _isInRecoveryMode = false;
+                                _pauseUntil = null;
+                                MartingaleStep = 0;
+                                
+                                _ = _botService.BroadcastSimpleAsync("✅ *KHÔI PHỤC HOẠT ĐỘNG*\nĐã có ván thắng phục hồi. Bắt đầu cược lại từ mức đầu tiên.");
+                            }
+                            else
+                            {
+                                // Still losing, stay in recovery/pause state (effectively)
+                                Console.WriteLine($"[AutoBet] Still losing after pause ({latest.IssueNumber}). Waiting for a win...");
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            // No prediction recorded for this latest result, cannot determine win/loss
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        _pauseUntil = null;
+                    }
+                }
             }
 
             if (_currentPrediction == null) return;
@@ -857,12 +942,49 @@ namespace DropAI.Services
 
         private string CreateMD5(string input)
         {
-            using var md5 = MD5.Create();
-            byte[] inputBytes = Encoding.UTF8.GetBytes(input);
-            byte[] hashBytes = md5.ComputeHash(inputBytes);
-            var sb = new StringBuilder();
-            foreach (var b in hashBytes) sb.Append(b.ToString("X2")); // X2 for Uppercase to match target
-            return sb.ToString();
+            using (var md5 = MD5.Create())
+            {
+                byte[] inputBytes = Encoding.UTF8.GetBytes(input);
+                byte[] hashBytes = md5.ComputeHash(inputBytes);
+                var sb = new StringBuilder();
+                foreach (var b in hashBytes) sb.Append(b.ToString("X2"));
+                return sb.ToString();
+            }
+        }
+
+        private void TrackSignalPerformance(GameHistoryItem latest)
+        {
+            string? historicalAiGuess = _aiPredictions.ContainsKey(latest.IssueNumber) ? _aiPredictions[latest.IssueNumber].Pred : null;
+            if (historicalAiGuess != null && historicalAiGuess != "-")
+            {
+                bool isWin = historicalAiGuess == latest.Size;
+                if (isWin)
+                {
+                    _consecutiveSignalLosses = 0;
+                }
+                else
+                {
+                    _consecutiveSignalLosses++;
+                    
+                    // Only trigger Pause and Notification if we are NOT already in recovery mode
+                    if (_consecutiveSignalLosses >= 3 && !_isInRecoveryMode)
+                    {
+                        string msg = $"⚠️ *CẢNH BÁO TẠM DỪNG*\n" +
+                                     $"Hệ thống phát hiện *3 ván SAI liên tiếp*!\n" +
+                                     $"- Kỳ cuối: {latest.IssueNumber}\n" +
+                                     $"- Kết quả: {latest.Size} ({latest.Number})\n\n" +
+                                     $"🎯 *Hành động:* Tự động dừng cược 3 phút và đợi ván thắng để khôi phục.";
+                        
+                        _ = _botService.BroadcastSimpleAsync(msg);
+                        _consecutiveSignalLosses = 0; 
+
+                        // FORCE PAUSE FOR AUTO-BET
+                        _pauseUntil = DateTime.Now.AddMinutes(3);
+                        _isInRecoveryMode = true;
+                        MartingaleStep = 0; 
+                    }
+                }
+            }
         }
     }
 
@@ -884,6 +1006,7 @@ namespace DropAI.Services
         public int Number { get; set; }
         public string Size { get; set; } = "";
         public string Parity { get; set; } = "";
+        public string? AiGuess { get; set; }
     }
 
     public class BetResult
@@ -891,7 +1014,7 @@ namespace DropAI.Services
         public bool Success { get; set; }
         public string? IssueNumber { get; set; }
         public string? Type { get; set; }
-        public int Amount { get; set; }
+        public decimal Amount { get; set; }
         public string? ErrorMessage { get; set; }
         public int MsgCode { get; set; }
         public string? Message { get; set; }

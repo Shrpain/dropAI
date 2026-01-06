@@ -147,14 +147,21 @@
                         </div>
                         
                         <div class="row g-2">
-                            <div class="col-md-6">
+                            <div class="col-md-4">
                                 <label class="small text-muted">Base Amount (VND)</label>
                                 <input type="number" id="baseAmountInput" class="form-control form-control-sm" value="1000">
                             </div>
-                            <div class="col-md-6">
-                                <label class="small text-muted">Martingale Values (BetCount)</label>
-                                <input type="text" id="martingaleConfig" class="form-control form-control-sm" value="2,4,8,19,40,90" title="Sequence of multipliers (comma separated)">
+                            <div class="col-md-4">
+                                <label class="small text-muted">Martingale Values</label>
+                                <input type="text" id="martingaleConfig" class="form-control form-control-sm" value="2,4,8,19,40,90">
                             </div>
+                            <div class="col-md-4">
+                                <label class="small text-muted">Target Profit (Lợi nhuận)</label>
+                                <input type="number" id="targetProfitInput" class="form-control form-control-sm" value="0" placeholder="VD: 15000">
+                            </div>
+                        </div>
+                        <div id="profitStatus" class="mt-2 small text-primary fw-bold" style="display:none;">
+                            Lợi nhuận hiện tại: <span id="currentProfitVal">0</span> / <span id="targetProfitVal">0</span>
                         </div>
                         <div class="mt-1">
                              <small class="text-muted" style="font-size: 0.7rem;">

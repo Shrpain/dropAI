@@ -23,7 +23,7 @@ namespace DropAI.TelegramBot
             var rows = new List<KeyboardButton[]>
             {
                 new KeyboardButton[] { "📊 Trạng thái", "▶ Bật Auto", "⏸ Tắt Auto" },
-                new KeyboardButton[] { "⚙ Cấu hình Martingale", "💰 Cấu hình Vốn" }
+                new KeyboardButton[] { "⚙ Cấu hình Martingale", "💰 Cấu hình Vốn", "🎯 Cài Target" }
             };
 
             if (!string.IsNullOrEmpty(savedUser))
@@ -139,6 +139,22 @@ namespace DropAI.TelegramBot
                         _userStates.TryRemove(chatId, out _);
                         return;
                     }
+                    else if (state == "WAIT_TARGET")
+                    {
+                        if (decimal.TryParse(text, out decimal target) && target >= 0)
+                        {
+                            api.ProfitTarget = target;
+                            var savedInfo = api.GetSavedLogin();
+                            await bot.SendTextMessageAsync(chatId, $"✅ Đã cài đặt mục tiêu lợi nhuận: {target:N0} đ", replyMarkup: GetMainMenu(savedInfo?.User));
+                        }
+                        else
+                        {
+                            var savedInfo = api.GetSavedLogin();
+                            await bot.SendTextMessageAsync(chatId, "❌ Số tiền không hợp lệ.", replyMarkup: GetMainMenu(savedInfo?.User));
+                        }
+                        _userStates.TryRemove(chatId, out _);
+                        return;
+                    }
                 }
 
                 // 2. Handle Commands / Buttons
@@ -165,19 +181,17 @@ namespace DropAI.TelegramBot
                     var balance = await api.GetBalanceAsync();
                     var saved = api.GetSavedLogin();
                     
-                    string mode = "📡 Tín hiệu @tinhieu168 (24/7)";
-                    
                     await bot.SendTextMessageAsync(chatId, 
                         $"📊 *TRẠNG THÁI HỆ THỐNG*\n" +
                         $"👤 *Tài khoản:* `{saved?.User ?? "N/A"}` ({loginStatus})\n" +
                         $"💰 *Số dư:* `{balance:N0} đ`\n" +
-                        $"🤖 *Tự động:* {autoBet}\n" +
-                        $"🎯 *Chế độ dự đoán:* {mode}\n" +
-                        $"💵 *Cược gốc:* `{api.BaseAmount:N0} đ`\n" +
-                        $"📈 *Chuỗi thắng:* {api.WinStreak} ván\n" +
-                        $"⚙ *Dãy cược:* `{string.Join(", ", api.MartingaleConfig)}`",
+                        $"🤖 Auto: {autoBet}\n" +
+                        $"🎯 Target: {api.ProfitTarget:N0} đ\n" +
+                        $"💵 Cược gốc: {api.BaseAmount:N0} đ\n" +
+                        $"📈 Chuỗi thắng: {api.WinStreak}\n" +
+                        $"⚙ Config: {string.Join(",", api.MartingaleConfig)}",
                         parseMode: ParseMode.Markdown,
-                        replyMarkup: GetMainMenu(saved?.User));
+                        replyMarkup: GetMainMenu(api.GetSavedLogin()?.User));
                 }
                 else if (lowerText == "▶ bật auto" || lowerText.Contains("/autobet on"))
                 {
@@ -255,6 +269,16 @@ namespace DropAI.TelegramBot
                         $"Hiện tại: {api.BaseAmount:N0} đ",
                         parseMode: ParseMode.Markdown);
                 }
+                else if (lowerText == "🎯 cài target")
+                {
+                    _userStates[chatId] = "WAIT_TARGET";
+                    await bot.SendTextMessageAsync(chatId, 
+                        $"🎯 *Nhập số tiền lời mục tiêu (VNĐ)*\n" +
+                        $"VD: 15000\n" +
+                        $"Hiện tại: {api.ProfitTarget:N0} đ\n\n" +
+                        $"_Nhập 0 để tắt chức năng Target._",
+                        parseMode: ParseMode.Markdown);
+                }
             }
             catch (Exception ex)
             {
@@ -266,6 +290,19 @@ namespace DropAI.TelegramBot
         {
             Console.WriteLine($"[TelegramBot] POLLING ERROR: {ex.Message}");
             return Task.CompletedTask;
+        }
+
+        public async Task BroadcastSimpleAsync(string message)
+        {
+            if (_activeChats.IsEmpty) return;
+            foreach (var chatId in _activeChats.Keys)
+            {
+                try
+                {
+                    await _bot.SendTextMessageAsync(chatId, message, parseMode: ParseMode.Markdown);
+                }
+                catch { }
+            }
         }
 
         public async Task BroadcastResultAsync(string balance, string issue, string number, string size, string aiGuess, string aiResult, string betAmount, string historyJson, int occurrences = 0, string reason = "")
