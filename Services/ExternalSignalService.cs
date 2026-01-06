@@ -164,20 +164,19 @@ namespace DropAI.Services
         {
             try
             {
-                // _logger.LogInformation($"📨 Nhận tin nhắn mới: {messageText}");
+                _logger.LogInformation($"📨 Nhận tin nhắn mới: {messageText.Replace("\n", " | ")}");
 
                 // Parse message format:
                 // VN168 WINGO 30 GIÂY
                 // Kỳ xổ: (100052437)
                 // 🪀 Vào Lệnh - NHỎ 🪐
 
-                // Extract Issue Number (looking for long digits, optionally in parentheses)
-                // Format could be: Kỳ xổ: (100052437) [9 digits] or 20260102100052437 [17 digits]
-                var issueMatch = Regex.Match(messageText, @"(?:Kỳ xổ:\s*)?\(?(\d{8,})\)?");
+                // Extract Issue Number (looking for digits, optionally in parentheses)
+                // Loose regex to catch 5+ digits
+                var issueMatch = Regex.Match(messageText, @"(?:Kỳ xổ:\s*)?\(?(\d{5,})\)?");
                 if (!issueMatch.Success)
                 {
-                    // Fallback: search for any sequence of 8+ digits
-                    issueMatch = Regex.Match(messageText, @"(\d{8,})"); 
+                    issueMatch = Regex.Match(messageText, @"(\d{5,})"); 
                 }
 
                 if (!issueMatch.Success)
@@ -191,13 +190,23 @@ namespace DropAI.Services
 
                 // Extract Prediction (LỚN/NHỎ)
                 var predictionMatch = Regex.Match(messageText, @"Vào Lệnh\s*-\s*(LỚN|NHỎ)", RegexOptions.IgnoreCase);
-                if (!predictionMatch.Success)
+                string prediction = "";
+                if (predictionMatch.Success)
                 {
-                    _logger.LogWarning("⚠️ Không tìm thấy dự đoán trong tin nhắn");
-                    return;
+                    prediction = predictionMatch.Groups[1].Value.ToUpper() == "LỚN" ? "Big" : "Small";
                 }
-
-                string prediction = predictionMatch.Groups[1].Value.ToUpper() == "LỚN" ? "Big" : "Small";
+                else
+                {
+                    // Secondary check: just look for the words LỚN or NHỎ if "Vào Lệnh" pattern fails
+                    if (messageText.Contains("LỚN", StringComparison.OrdinalIgnoreCase)) prediction = "Big";
+                    else if (messageText.Contains("NHỎ", StringComparison.OrdinalIgnoreCase)) prediction = "Small";
+                    
+                    if (string.IsNullOrEmpty(prediction))
+                    {
+                        _logger.LogWarning("⚠️ Không tìm thấy dự đoán (LỚN/NHỎ) trong tin nhắn");
+                        return;
+                    }
+                }
 
                 // Extract raw signal line (looking for "Vào Lệnh - LỚN/NHỎ")
                 // We'll try to find the line that contains the prediction words
