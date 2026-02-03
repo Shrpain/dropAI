@@ -198,6 +198,16 @@ namespace DropAI.Services
                     _token = data.GetProperty("token").GetString();
                     Console.WriteLine($"[GameAPI] Login Success for {username}");
                     SaveLoginInfo(username, password);
+                    
+                    // Set Initial Balance for Profit Calculation
+                    try 
+                    {
+                        var balance = await GetBalanceAsync();
+                        InitialBalance = balance;
+                        Console.WriteLine($"[GameAPI] Initial Balance set to: {InitialBalance:N0}");
+                    }
+                    catch { }
+                    
                     return true;
                 }
                 Console.WriteLine($"[GameAPI] Login Failed: {resultJson}");
@@ -249,6 +259,9 @@ namespace DropAI.Services
             Console.WriteLine("[GameAPI] User logged out.");
         }
 
+        public string UserName { get; private set; } = "";
+        public string NickName { get; private set; } = "";
+
         public async Task<decimal> GetBalanceAsync()
         {
             if (!IsLoggedIn) return 0;
@@ -259,18 +272,51 @@ namespace DropAI.Services
                 var signParams = new SortedDictionary<string, object> { { "language", 2 }, { "random", random } };
                 string signature = SignPayload(signParams);
                 var payload = new { language = 2, random = random, signature = signature, timestamp = timestamp };
+                
+                // Using specialized GetBalance endpoint for speed
                 var json = await SendPostAsync($"{API_BASE}/GetBalance", payload);
                 if (string.IsNullOrEmpty(json)) return 0;
+                
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (root.TryGetProperty("code", out var code) && code.GetInt32() == 0)
                 {
-                    _lastKnownBalance = root.GetProperty("data").GetProperty("amount").GetDecimal();
+                    var data = root.GetProperty("data");
+                    if (data.TryGetProperty("amount", out var amt)) _lastKnownBalance = amt.GetDecimal();
                     return _lastKnownBalance;
                 }
                 return 0;
             }
             catch { return 0; }
+        }
+
+        public async Task<bool> UpdateUserInfoAsync()
+        {
+            if (!IsLoggedIn) return false;
+            try
+            {
+                string random = Guid.NewGuid().ToString("N").ToLower();
+                long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                var signParams = new SortedDictionary<string, object> { { "language", 2 }, { "random", random } };
+                string signature = SignPayload(signParams);
+                var payload = new { language = 2, random = random, signature = signature, timestamp = timestamp };
+                
+                var json = await SendPostAsync($"{API_BASE}/GetUserInfo", payload);
+                if (string.IsNullOrEmpty(json)) return false;
+                
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("code", out var code) && code.GetInt32() == 0)
+                {
+                    var data = root.GetProperty("data");
+                    if (data.TryGetProperty("amount", out var amt)) _lastKnownBalance = amt.GetDecimal();
+                    if (data.TryGetProperty("userName", out var u)) UserName = u.GetString() ?? "";
+                    if (data.TryGetProperty("nickName", out var n)) NickName = n.GetString() ?? "";
+                    return true;
+                }
+                return false;
+            }
+            catch { return false; }
         }
 
         public void StartPolling()
@@ -300,7 +346,7 @@ namespace DropAI.Services
                 {
                     if (IsLoggedIn)
                     {
-                        var history = await GetGameHistoryAsync(CurrentGameId, 30);
+                        var history = await GetGameHistoryAsync(CurrentGameId, 15); // Reduced from 30
                         if (history.Count > 0)
                         {
                             var latest = history[0];
@@ -308,105 +354,75 @@ namespace DropAI.Services
                             {
                                 _lastProcessedResultIssue = latest.IssueNumber;
                                 
-                                // Save to Supabase
-                                await _supabase.AddHistoryAsync(latest);
-
-                                // Refresh long history and train AI every 20 rounds
-                                if (loopCount++ % 20 == 0)
-                                {
-                                    var longHistory = await _supabase.GetRecentHistoryAsync(2000);
-                                    _predictionService.UpdateLongHistory(longHistory);
-                                    await _supabase.RunCleanupAsync(); // Also cleanup old data
-                                }
-
-                                // AI Prediction
+                                // --- FAST PATH START: Prioritize Betting ---
                                 string nextIssue = (long.Parse(latest.IssueNumber) + 1).ToString();
                                 var prediction = _predictionService.PredictNext(history);
                                 _predictions[nextIssue] = prediction;
 
-                                // Handle Martingale Result
+                                // Calculate Martingale Step IMMEDIATELY
                                 if (LastBetIssue == latest.IssueNumber)
                                 {
-                                    if (LastBetSide == latest.Size)
-                                    {
-                                        Console.WriteLine($"[AutoBet] WIN detected on {latest.IssueNumber}! Resetting step.");
-                                        CurrentMartingaleStep = 0;
-                                    }
-                                    else
-                                    {
-                                        Console.WriteLine($"[AutoBet] LOSS detected on {latest.IssueNumber}. Next step.");
+                                    if (LastBetSide == latest.Size) CurrentMartingaleStep = 0;
+                                    else {
                                         CurrentMartingaleStep++;
                                         if (CurrentMartingaleStep >= MartingaleMultipliers.Length) CurrentMartingaleStep = 0;
                                     }
                                     LastBetIssue = null;
                                 }
 
-                                // Update balances for profit tracking
-                                var balance = await GetBalanceAsync();
-                                
-                                // Auto Stop on Target Profit
-                                if (AutoBetEnabled && TargetProfit > 0 && CurrentProfit >= TargetProfit)
-                                {
-                                    Console.WriteLine($"[AutoBet] TARGET REACHED: +{CurrentProfit} / {TargetProfit}. Stopping.");
-                                    AutoBetEnabled = false;
-                                    SaveConfig();
-                                    if (_botService != null) await _botService.BroadcastSimpleAsync($"🎯 *MỤC TIÊU ĐÃ ĐẠT!* \nLợi nhuận: `+{CurrentProfit:N0} đ` \nĐã dừng cược tự động.");
-                                }
-
-                                // Execute Auto Bet
+                                // EXECUTE BET NOW (Before any slow tasks)
                                 if (AutoBetEnabled && prediction.Pred != "Wait")
                                 {
                                     int multiplier = MartingaleMultipliers[CurrentMartingaleStep];
-                                    int betAmount = multiplier * 1000; // For display only
-                                    Console.WriteLine($"[AutoBet] EXECUTING: {prediction.Pred} - {betAmount}đ on {nextIssue}");
-                                    
-                                    var success = await PlaceBetAsync(CurrentGameId, nextIssue, prediction.Pred, multiplier);
-                                    if (success)
-                                    {
-                                        LastBetIssue = nextIssue;
-                                        LastBetSide = prediction.Pred;
-                                        LastBetAmount = betAmount;
-                                    }
-                                }
-
-                                if (_botService != null)
-                                {
-                                    balance = await GetBalanceAsync();
-                                    
-                                    var historyWithPred = history.Select(h => {
-                                        string predStr = "-";
-                                        string resultStr = "";
-                                        if (_predictions.TryGetValue(h.IssueNumber, out var pred))
+                                    _ = Task.Run(async () => {
+                                        var success = await PlaceBetAsync(CurrentGameId, nextIssue, prediction.Pred, multiplier);
+                                        if (success)
                                         {
-                                            predStr = pred.Pred;
-                                            if (pred.Pred != "Wait") {
-                                                resultStr = (pred.Pred == h.Size) ? "✅" : "❌";
-                                            } else {
-                                                resultStr = "  "; 
-                                            }
+                                            LastBetIssue = nextIssue;
+                                            LastBetSide = prediction.Pred;
+                                            LastBetAmount = multiplier * 1000;
                                         }
-                                        return new {
-                                            issue = h.IssueNumber, num = h.Number, sz = h.Size, p = h.Parity, pred = predStr, res = resultStr
-                                        };
-                                    }).Take(10).ToList();
-
-                                    string historyJson = JsonSerializer.Serialize(historyWithPred);
-                                    await _botService.BroadcastResultAsync(
-                                        balance.ToString("N0") + " đ", 
-                                        latest.IssueNumber, 
-                                        latest.Number.ToString(), 
-                                        latest.Size, 
-                                        historyJson,
-                                        prediction.Pred,
-                                        prediction.Confidence,
-                                        prediction.Reason);
+                                    });
                                 }
+                                // --- FAST PATH END ---
+
+                                // --- BACKGROUND TASKS: Non-blocking reporting ---
+                                _ = Task.Run(async () => {
+                                    try {
+                                        await _supabase.AddHistoryAsync(latest);
+                                        if (loopCount % 20 == 0) {
+                                            var longHistory = await _supabase.GetRecentHistoryAsync(2000);
+                                            _predictionService.UpdateLongHistory(longHistory);
+                                            await _supabase.RunCleanupAsync();
+                                        }
+                                        loopCount++;
+
+                                        if (_botService != null) {
+                                            var balance = await GetBalanceAsync();
+                                            var historyWithPred = history.Select(h => {
+                                                string predStr = "-";
+                                                string resultStr = "";
+                                                if (_predictions.TryGetValue(h.IssueNumber, out var pred)) {
+                                                    predStr = pred.Pred;
+                                                    if (pred.Pred != "Wait") resultStr = (pred.Pred == h.Size) ? "✅" : "❌";
+                                                    else resultStr = "  ";
+                                                }
+                                                return new { issue = h.IssueNumber, num = h.Number, sz = h.Size, p = h.Parity, pred = predStr, res = resultStr };
+                                            }).Take(10).ToList();
+
+                                            string historyJson = JsonSerializer.Serialize(historyWithPred);
+                                            await _botService.BroadcastResultAsync(
+                                                balance.ToString("N0") + " đ", latest.IssueNumber, latest.Number.ToString(), 
+                                                latest.Size, historyJson, prediction.Pred, prediction.Confidence, prediction.Reason);
+                                        }
+                                    } catch (Exception ex) { Console.WriteLine($"[GameAPI] Background Task Error: {ex.Message}"); }
+                                });
                             }
                         }
                     }
                 }
                 catch (Exception ex) { Console.WriteLine($"[GameAPI] Poll Error: {ex.Message}"); }
-                await Task.Delay(2000, ct); 
+                await Task.Delay(500, ct); // Reduced further to 500ms for even faster detection
             }
         }
 
@@ -430,12 +446,11 @@ namespace DropAI.Services
                         currentIssue = issue;
                     }
                     
-                    // Skip if already bet on this issue
+                    // Skip if already bet on this issue OR if it failed previously in this call
                     if (_bettedIssues.Contains(currentIssue))
                     {
-                        Console.WriteLine($"[GameAPI] Already bet on {currentIssue}, waiting for new period...");
-                        await Task.Delay(1000);
-                        continue;
+                        Console.WriteLine($"[GameAPI] Already bet on {currentIssue}. Exit.");
+                        return true; 
                     }
                     
                     // gameType: 2 for WinGo Big/Small betting
@@ -478,39 +493,31 @@ namespace DropAI.Services
 
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
-                    if (root.TryGetProperty("code", out var code) && code.GetInt32() == 0)
+                    bool isCodeZero = root.TryGetProperty("code", out var code) && code.GetInt32() == 0;
+                    
+                    string msgText = "";
+                    if (root.TryGetProperty("msg", out var bMsg)) msgText = bMsg.GetString() ?? "";
+                    
+                    bool isSucceedMsg = msgText.Contains("success", StringComparison.OrdinalIgnoreCase) || 
+                                       msgText.Contains("Succeed", StringComparison.OrdinalIgnoreCase);
+
+                    if (isCodeZero && isSucceedMsg)
                     {
                         Console.WriteLine($"[GameAPI] Bet Placed: {selection} {betCount * 1000}đ on {currentIssue}");
                         _bettedIssues.Add(currentIssue);
-                        // Cleanup old entries (keep only last 50)
+                        await GetBalanceAsync();
+                        Console.WriteLine($"[GameAPI] Post-bet Balance: {_lastKnownBalance:N0} đ");
                         if (_bettedIssues.Count > 50) _bettedIssues.Clear();
                         return true;
                     }
-                    
-                    // Check if period is settled - wait a moment and retry
-                    if (root.TryGetProperty("msg", out var msg))
-                    {
-                        var msgStr = msg.GetString() ?? "";
-                        
-                        if (msgStr.Contains("settled"))
-                        {
-                            Console.WriteLine($"[GameAPI] Period {currentIssue} settled, waiting for new period...");
-                            await Task.Delay(2000);
-                            continue;
-                        }
-                        
-                        if (msgStr.Contains("resubmit"))
-                        {
-                            Console.WriteLine($"[GameAPI] Already bet on {currentIssue}, treating as success");
-                            _bettedIssues.Add(currentIssue);
-                            return true; // Already bet on this period - treat as success
-                        }
-                    }
-                    
-                    Console.WriteLine($"[GameAPI] Bet Failed ({currentIssue}): {json}");
-                    return false;
+
+                    // If we reach here, the bet wasn't successful (e.g., settled, resubmit, or error)
+                    // Log it and WAIT 1s before retrying the loop (which will find the next available issue)
+                    Console.WriteLine($"[GameAPI] Bet Pending/Failed for {currentIssue}: {msgText}. Retrying in 1s...");
                 }
-                catch (Exception ex) { Console.WriteLine($"[GameAPI] Bet Error: {ex.Message}"); return false; }
+                catch (Exception ex) { Console.WriteLine($"[GameAPI] Bet Error: {ex.Message}"); }
+                
+                await Task.Delay(1000); // Always wait 1s before next attempt
             }
             return false;
         }
