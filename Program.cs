@@ -1,54 +1,31 @@
-var builder = WebApplication.CreateBuilder(args);
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
-// Add services to the container.
-builder.Services.AddRazorPages();
-builder.Services.AddControllers();
-builder.Services.AddSignalR();
+var builder = Host.CreateApplicationBuilder(args);
+
+// NEW DEDICATED PROJECT
+string supabaseUrl = "https://khboofjxmgaymuzepbwb.supabase.co";
+string supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtoYm9vZmp4bWdheW11emVwYndiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxMzYyODcsImV4cCI6MjA4NTcxMjI4N30.oymkhW42xviW1KorAY5lhPXPjGTZLXFwEK4OXo1ixoA";
+
+builder.Services.AddSingleton<DropAI.Services.PredictionService>();
+builder.Services.AddSingleton(new DropAI.Services.SupabaseService(supabaseUrl, supabaseKey));
 builder.Services.AddSingleton<DropAI.Services.GameApiService>();
-builder.Services.AddSingleton<DropAI.Services.ExternalSignalService>();
-// builder.Services.AddSingleton<DropAI.Services.BrowserService>();
 
 // Telegram Bot Service
 var botToken = "8556887360:AAFWLcr0bnNSOFvPE_GTMAsmOV4NezXU72k";
 if (!string.IsNullOrEmpty(botToken))
 {
-    // Register as Singleton for injection
-    builder.Services.AddSingleton(sp => new DropAI.TelegramBot.TelegramBotService(botToken));
-    // Register as HostedService for auto-start (using the same singleton instance)
+    builder.Services.AddSingleton(sp => new DropAI.TelegramBot.TelegramBotService(botToken, sp.GetRequiredService<DropAI.Services.GameApiService>()));
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DropAI.TelegramBot.TelegramBotService>());
 }
-// ...
 
-var app = builder.Build();
-DropAI.Program.App = app;
+using IHost host = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (!app.Environment.IsDevelopment())
-{
-    // app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
-    app.UseHsts();
-}
+_ = host.Services.GetRequiredService<DropAI.Services.GameApiService>();
 
-app.UseHttpsRedirection();
-app.UseStaticFiles();
- 
-// Pre-initialize services to trigger constructors/auto-logins
-_ = app.Services.GetRequiredService<DropAI.Services.ExternalSignalService>();
-_ = app.Services.GetRequiredService<DropAI.Services.GameApiService>();
- 
-app.UseRouting();
-
-app.UseAuthorization();
-
-app.MapRazorPages();
-app.MapControllers();
-app.MapHub<DropAI.Hubs.BrowserHub>("/browserHub");
-
-app.Run();
+await host.RunAsync();
 
 namespace DropAI {
     public partial class Program {
-        public static WebApplication? App { get; set; }
     }
 }
